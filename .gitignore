@@ -49,3 +49,7 @@ Temporary Items
 # My settings
 *~
 *.exe
+*.stackdump
+*#
+.#*
+#*

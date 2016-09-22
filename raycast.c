@@ -41,13 +41,12 @@ typedef struct RGBAPixel {
 
 typedef struct PPM_file_struct {
   char magic_number;
-  int lines;
   int width;
   int height;
   int alpha;
   int depth;
   char *tupltype;
-  FILE* fh_in;
+  FILE* fh_out;
 } PPM_file_struct ;
 
 typedef struct JSON_file_struct {
@@ -58,13 +57,12 @@ typedef struct JSON_file_struct {
   double *position;
   double *normal;
   double radius;
-  FILE* fh_in;
 } JSON_file_struct ;
 
 // global variables
 int CURRENT_CHAR        = 'a';
 int OUTPUT_MAGIC_NUMBER = 6; // default to P6 PPM format
-int VERBOSE             = 0; // controls logfile message level
+int VERBOSE             = 1; // controls logfile message level
 
 // global data structures
 JSON_file_struct    INPUT_FILE_DATA;
@@ -73,9 +71,10 @@ RGBAPixel          *RGBA_PIXEL_MAP;
 PPM_file_struct     OUTPUT_FILE_DATA;
 
 // functions
-void  skipWhitespace(FILE* json);
+char  skipWhitespace(FILE* json);
+void  skip_ws(FILE* json);
 char* getString(FILE* json);
-void  parseJSON(char* input_file);
+int   parseJSON(char* input_file);
 void  writePPM        (char *outfile,         PPM_file_struct *input);
 void  message         (char message_code[],   char message[]        );
 void  writePPMHeader  (FILE* fh              );
@@ -87,6 +86,8 @@ int   computeDepth();
 char* computeTuplType();
 void  freeGlobalMemory ();
 void  closeAndExit ();
+int   mygetc (FILE* fh);
+
 
 /*
  ------------------------------------------------------------------
@@ -94,22 +95,38 @@ void  closeAndExit ();
  ------------------------------------------------------------------
 */
 int main(int argc, char *argv[]) {
-  //message("Usage","raycast width height input.json output.ppm");
+  // check for proper number of input args
   if (argc != 5) {
     help();
     return(1);
   }
 
-  int width = argv[1];
-  int height = argv[2];
+  // process input arguments and report what is being processed, store some variables
+  int width = atoi(argv[1]);
+  int height = atoi(argv[2]);
   char *infile = argv[3];
   char *outfile = argv[4];
-
+  if (strcmp(infile,outfile)  == 0) {printf("Error: input and output file names the same!\n"); return EXIT_FAILURE;}
+  
   message("Info","Processing the following arguments:");
   printf("          Input : %s\n",infile);
   printf("          Output: %s\n",outfile);
   printf("          Width : %d\n",width);
   printf("          Height: %d\n",height);
+
+  INPUT_FILE_DATA.width = width;
+  INPUT_FILE_DATA.height = height;
+
+  // parse the JSON
+  int parse_success = parseJSON(infile);
+  if (parse_success == 1) {
+    message("Error","Empty JSON file, what am I supposed to render?");
+  }
+
+  // run the raycasting
+
+  // write the image
+  
 
   return EXIT_SUCCESS;
 }
@@ -127,12 +144,26 @@ int main(int argc, char *argv[]) {
   ------------------------
 */
 // "separation of concerns" means we should pass data in, not work on global values
-void skipWhitespace(FILE* json) {
+// Use skipWhitespace in conjunction with checking the current char
+char skipWhitespace(FILE* json) {
   int c = fgetc(json);
   while (isspace(c)) {
+    if (VERBOSE) printf("  sW: skipping whitespace\n");
     c = fgetc(json);
   }
+  if (VERBOSE) printf("  sW: returning> (%c)\n",c);
+  return c;
+}
+
+// use skip_ws prior to getString, which expects the current char to rollback by one to '"'
+void skip_ws(FILE* json) {
+  int c = mygetc(json);
+  while (isspace(c)) {
+    if (VERBOSE) printf("  s_w: skipping whitespace\n");
+    c = mygetc(json);
+  }
   // give the first non-whitespace char back
+  if (VERBOSE) printf("   s_w: ungetting char> (%c)\n",c);
   ungetc(c,json);
 }
 
@@ -140,77 +171,81 @@ void skipWhitespace(FILE* json) {
 // can assume no space in the string itself
 char* getString(FILE* json) {
   char buffer[128]; // since strdup will give correct size, could also start smaller and realloc()
-  int c = fgetc(json);
+  int c = mygetc(json);
   // error checking
   if (c != '"') {
-    fprintf(stderr, "Error: unexpected string\n"); // could keep line number as well to impress
+    message("Error","unexpected string"); // could keep line number as well to impress
     exit(1);
   }
 
-  c = fgetc(json); // should be first char in string unless empty string
+  c = mygetc(json); // should be first char in string unless empty string
   int i = 0;
   while (c != '"') {
     buffer[i] = c;
-    c = fgetc(json);
+    c = mygetc(json);
     i++;
   }
   buffer[i] = 0; //terminator
 
-  //return buffer; // can't just return it, 
+  //return buffer; // can't just return it, strdup will return a copy of it
+  if (VERBOSE) printf("  gS: returning %s\n",buffer);
   return strdup(buffer);
 }
 
-void parseJSON(char* input_file) {
+int parseJSON(char* input_file) {
   // plain text, so no need for binary mode
   FILE* json = fopen(input_file,"r");
 
   // now read the data
   // skip whitespace until open bracket (he'll put it in there just to trip us up)
-  skipWhitespace(json);
-  int c = fgetc(json);
+  int c = skipWhitespace(json);
   // beginning of list
   if (c != '[') {
-    fprintf(stderr,"Error: File must begin with [\n");
-    fclose(json); // any modern OS should do this, but should write the cleanup proc to free also
-    exit(1);
+    message("Error","File must begin with [\n");
   }
-  skipWhitespace(json);
+  c = skipWhitespace(json);
 
-  // find the objects
-  c = fgetc(json);
   // handle empty lists can also be valid
   if (c == ']') {
+    message("Info","Empty JSON data");
     fclose(json);
-    exit(0); // actually, we'll have to do the raycaster part here
+    return 1;
   }
-  if (c != '"' ) {
+
+  // find the objects
+  if (c == '{' ) {
     // parse the object, we know type is first which is nice
+    skip_ws(json);
     char* key = getString(json);
     if (strcmp(key,"type") != 0) {
-      exit(1);
+      message("Error","First key expected to be 'type'\n");
     }
-    skipWhitespace(json);
     
-    c = fgetc(json);
+    c = skipWhitespace(json);
+    printf("DBG: char is (%c)\n",c);
     if (c != ':') {
-      exit(1);
+      message("Error","Unrecognized format, expected ':' between key/value");
     }
 
-    skipWhitespace(json);
-    
+    skip_ws(json);
     char* type = getString(json);
     if (strcmp(type, "camera") == 0) {
+      INPUT_FILE_DATA.type = type;
     } else if (strcmp(type, "sphere") == 0) {
     } else if (strcmp(type, "plane") == 0) {
     } else {
       // unknown type
-      exit(1);
+      message("Error","Unhandled type");
     }
+  } else {
+    message("Error","Expected curly brace to open object list");
   }
   
   
+  // successful parse of JSON
   // make sure to close so the buffer gets written, defined behavior
   fclose(json);
+  return 0;
 }
 
 /*
@@ -252,7 +287,8 @@ void help () {
 */
 // TODO: make this more universal
 void freeGlobalMemory () {
-  //  free(RGBA_PIXEL_MAP);
+  // free(RGBA_PIXEL_MAP);
+  printf("TODO: free the global memory from any mallocs\n");
 }
 
 /*
@@ -414,4 +450,10 @@ void reportPixelMap (RGBPixel *pm) {
     index++;
     fail_safe++;
   }
+}
+
+int mygetc (FILE* fh) {
+  int c = fgetc(fh);
+  if (VERBOSE) printf("  mygetc char> (%c)\n",c);
+  return c;
 }
