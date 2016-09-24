@@ -18,12 +18,19 @@ Workflow:
 Issues:
 -------
 
+Questions:
+-------
+- share emacs tricks: match-paren, cursor point/jump, ctrk-k, goto-line
+- colors: is the 1.0 normalized from 255? So 0.5 would be 128, etc?
+- positioning of the objects themselves, relative to what?
+- how to pass a parameterized member: 	    INPUT_FILE_DATA.js_objects[obj_count].&key = value;
 ---------------------------------------------------------------------------------------
 */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <ctype.h>
+#include <math.h>
 
 // typdefs
 typedef struct RGBPixel {
@@ -49,44 +56,284 @@ typedef struct PPM_file_struct {
   FILE* fh_out;
 } PPM_file_struct ;
 
-typedef struct JSON_file_struct {
+typedef struct x_y_z {
+  double x;
+  double y;
+  double z;
+} x_y_z ;
+
+typedef struct JSON_object {
   char *type;
   double width;
   double height;
-  double *color;
-  double *position;
-  double *normal;
+  x_y_z color;
+  x_y_z position;
+  x_y_z normal;
   double radius;
+} JSON_object ;
+
+// This may not be the best approach, and it's certainly not most efficient - to have an array that
+// is always 128 "JSON_object"s large. But it's clean and all of the data related to the JSON
+// scene file is in this one struct, filehandle and all, that's what I like about it.
+typedef struct JSON_file_struct {
+  FILE* fh_in;
+  int width;
+  int height;
+  int num_objects;
+  JSON_object js_objects[128];
 } JSON_file_struct ;
 
 // global variables
 int CURRENT_CHAR        = 'a';
 int OUTPUT_MAGIC_NUMBER = 6; // default to P6 PPM format
-int VERBOSE             = 1; // controls logfile message level
+int VERBOSE             = 0; // controls logfile message level
 
 // global data structures
 JSON_file_struct    INPUT_FILE_DATA;
 RGBPixel           *RGB_PIXEL_MAP;
-RGBAPixel          *RGBA_PIXEL_MAP;
 PPM_file_struct     OUTPUT_FILE_DATA;
+RGBAPixel          *RGBA_PIXEL_MAP;
 
 // functions
-char  skipWhitespace(FILE* json);
-void  skip_ws(FILE* json);
-char* getString(FILE* json);
-int   parseJSON(char* input_file);
 void  writePPM        (char *outfile,         PPM_file_struct *input);
 void  message         (char message_code[],   char message[]        );
 void  writePPMHeader  (FILE* fh              );
 void  reportPPMStruct (PPM_file_struct *input);
 void  reportPixelMap  (RGBPixel *pm          );
+void  printJSONObjectStruct (JSON_object jostruct);
+void  storeDouble(int obj_count, char* key, double value);
+void  storeVector(int obj_count, char* key, double* value);
+void  rayCast(JSON_object *scene, RGBPixel *image);
+unsigned char shadePixel (double value);
 
 void  help            ();
 int   computeDepth();
 char* computeTuplType();
 void  freeGlobalMemory ();
 void  closeAndExit ();
-int   mygetc (FILE* fh);
+void  reportScene();
+
+/* 
+ ------------------------------------------------------------------
+ Parser and functions from Dr. P - refactored and enhanced
+ ------------------------------------------------------------------
+*/
+int line = 1;
+
+// nextC() wraps the getc() function and provides error checking and line
+// number maintenance
+int nextC(FILE* json) {
+  int c = fgetc(json);
+  if (VERBOSE) printf("'%c'", c);
+  if (c == '\n') {
+    line += 1;
+  }
+  if (c == EOF) {
+    //TODO - message this
+    fprintf(stderr, "Error: Unexpected end of file on line number %d.\n", line);
+    exit(1);
+  }
+  return c;
+}
+
+// expectC() checks that the next character is d.  If it is not it emits
+void expectC(FILE* json, int d) {
+  int c = nextC(json);
+  if (c == d) return;
+  //TODO - message this
+  fprintf(stderr, "Error: Expected '%c' on line %d.\n", d, line);
+  exit(1);    
+}
+
+
+// skipWSpace() skips white space in the file.
+void skipWSpace(FILE* json) {
+  int c = nextC(json);
+  while (isspace(c)) {
+    c = nextC(json);
+  }
+  ungetc(c, json);
+}
+
+
+// nextString() gets the next string from the file handle and emits an error
+// if a string can not be obtained.
+char* nextString(FILE* json) {
+  char buffer[129];
+  int c = nextC(json);
+  if (c != '"') {
+    fprintf(stderr, "Error: Expected string on line %d.\n", line);
+    exit(1);
+  }  
+  c = nextC(json);
+  int i = 0;
+  while (c != '"') {
+    if (i >= 128) {
+      fprintf(stderr, "Error: Strings longer than 128 characters in length are not supported.\n");
+      exit(1);      
+    }
+    if (c == '\\') {
+      fprintf(stderr, "Error: Strings with escape codes are not supported.\n");
+      exit(1);      
+    }
+    if (c < 32 || c > 126) {
+      fprintf(stderr, "Error: Strings may contain only ascii characters.\n");
+      exit(1);
+    }
+    buffer[i] = c;
+    i += 1;
+    c = nextC(json);
+  }
+  buffer[i] = 0;
+  if (VERBOSE) printf("\nnS:  returning string--> (%s)\n",buffer);
+  return strdup(buffer);
+}
+
+double nextNumber(FILE* json) {
+  double value;
+  fscanf(json, "%lf", &value);
+  // TODO: Error checking
+  if (VERBOSE) printf("\nnN:  returning number--> (%lf)\n",value);
+  return value;
+}
+
+double* nextVector(FILE* json) {
+  double* v = malloc(3*sizeof(double));
+  expectC(json, '[');
+  skipWSpace(json);
+  v[0] = nextNumber(json);
+  skipWSpace(json);
+  expectC(json, ',');
+  skipWSpace(json);
+  v[1] = nextNumber(json);
+  skipWSpace(json);
+  expectC(json, ',');
+  skipWSpace(json);
+  v[2] = nextNumber(json);
+  skipWSpace(json);
+  expectC(json, ']');
+  if (VERBOSE) printf("nV: returning vector--> %d\n",v);
+  return v;
+}
+
+// This is the big JSON parser function
+void readScene(char* filename) {
+  int c;
+  int obj_count = 0;
+  
+  FILE* json = fopen(filename, "r");
+
+  if (json == NULL) {
+    fprintf(stderr, "Error: Could not open file \"%s\"\n", filename);
+    exit(1);
+  }
+  
+  skipWSpace(json);
+  
+  // Find the beginning of the list
+  expectC(json, '[');
+
+  skipWSpace(json);
+
+  // Find all the objects in the JSON scene file
+  while (1) {
+    c = fgetc(json);
+    if (c == ']') {
+      fprintf(stderr, "Error: This is the worst scene file EVER.\n");
+      fclose(json);
+      return;
+    }
+    if (c == '{') {
+      skipWSpace(json);
+      
+      // Parse the object, getting the type first
+      char* key = nextString(json);
+      if (strcmp(key, "type") != 0) {
+	fprintf(stderr, "Error: Expected \"type\" key on line number %d.\n", line);
+	exit(1);
+      }
+      
+      skipWSpace(json);
+      expectC(json, ':');
+      skipWSpace(json);
+      
+      // get the type of the object and store it at the index of the current object
+      char* value = nextString(json);
+      if (strcmp(value, "camera") == 0) {
+	message("Info","Processing camera object...");
+	INPUT_FILE_DATA.js_objects[obj_count].type = "camera";
+	INPUT_FILE_DATA.num_objects = obj_count;
+      } else if (strcmp(value, "sphere") == 0) {
+	message("Info","Processing sphere object...");
+	INPUT_FILE_DATA.js_objects[obj_count].type = "sphere";
+	INPUT_FILE_DATA.num_objects = obj_count;
+      } else if (strcmp(value, "plane") == 0) {
+	message("Info","Processing plane object...");
+	INPUT_FILE_DATA.js_objects[obj_count].type = "plane";
+	INPUT_FILE_DATA.num_objects = obj_count;
+      } else {
+	fprintf(stderr, "Error: Unknown type, \"%s\", on line number %d.\n", value, line);
+	exit(1);
+      }
+      skipWSpace(json);
+      
+      // This while processes the attributes of the object
+      while (1) {
+	// , }
+	c = nextC(json);
+	if (c == '}') {
+	  // stop parsing this object and increment the object counter
+	  obj_count++;
+	  break;
+	} else if (c == ',') {
+	  // read another field
+	  skipWSpace(json);
+	  char* key = nextString(json);
+	  skipWSpace(json);
+	  expectC(json, ':');
+	  skipWSpace(json);
+	  //INPUT_FILE_DATA.js_objects[obj_count].width = nextNumber(json);
+	  //
+	  if ((strcmp(key, "width") == 0) ||
+	      (strcmp(key, "height") == 0) ||
+	      (strcmp(key, "radius") == 0)) {
+	    double value = nextNumber(json);
+	    storeDouble(obj_count,key,value);
+	  } else if ((strcmp(key, "color") == 0) ||
+		     (strcmp(key, "position") == 0) ||
+		     (strcmp(key, "normal") == 0)) {
+	    double* value = nextVector(json);
+	    storeVector(obj_count,key,value);
+	  } else {
+	    fprintf(stderr, "Error: Unknown property, \"%s\", on line %d.\n",key, line);
+	  }
+	  skipWSpace(json);
+	} else {
+	  fprintf(stderr, "Error: Unexpected value on line %d\n", line);
+	  exit(1);
+	}
+      }
+      skipWSpace(json);
+      c = nextC(json);
+      if (c == ',') {
+	skipWSpace(json);
+      } else if (c == ']') {
+	fclose(json);
+	return;
+      } else {
+	// TODO: message this
+	fprintf(stderr, "Error: Expecting ',' or ']' on line %d.\n", line);
+	exit(1);
+      }
+    }
+  }
+  message("Info","Read scene file");
+}
+/* 
+ ------------------------------------------------------------------
+ End pirated code - Parser and functions from Dr. P
+ ------------------------------------------------------------------
+*/
 
 
 /*
@@ -118,16 +365,23 @@ int main(int argc, char *argv[]) {
   INPUT_FILE_DATA.height = height;
 
   // parse the JSON
-  int parse_success = parseJSON(infile);
-  if (parse_success == 1) {
-    message("Error","Empty JSON file, what am I supposed to render?");
-  }
+  //int parse_success = parseJSON(infile);
+  // Read scene - code from class
+  readScene(infile);
+  
+  // report results (if VERBOSE probably)
+  reportScene();
 
+  // initialize the image buffer
+  RGB_PIXEL_MAP = malloc(sizeof(RGBPixel)  * INPUT_FILE_DATA.width * INPUT_FILE_DATA.height );
+  
   // run the raycasting
+  rayCast(INPUT_FILE_DATA.js_objects,RGB_PIXEL_MAP);
 
   // write the image
   
-
+  // prepare to exit
+  freeGlobalMemory();
   return EXIT_SUCCESS;
 }
 /* 
@@ -143,110 +397,6 @@ int main(int argc, char *argv[]) {
   FUNCTION IMPLEMENTATIONS
   ------------------------
 */
-// "separation of concerns" means we should pass data in, not work on global values
-// Use skipWhitespace in conjunction with checking the current char
-char skipWhitespace(FILE* json) {
-  int c = fgetc(json);
-  while (isspace(c)) {
-    if (VERBOSE) printf("  sW: skipping whitespace\n");
-    c = fgetc(json);
-  }
-  if (VERBOSE) printf("  sW: returning> (%c)\n",c);
-  return c;
-}
-
-// use skip_ws prior to getString, which expects the current char to rollback by one to '"'
-void skip_ws(FILE* json) {
-  int c = mygetc(json);
-  while (isspace(c)) {
-    if (VERBOSE) printf("  s_w: skipping whitespace\n");
-    c = mygetc(json);
-  }
-  // give the first non-whitespace char back
-  if (VERBOSE) printf("   s_w: ungetting char> (%c)\n",c);
-  ungetc(c,json);
-}
-
-// helper to get a string from current position
-// can assume no space in the string itself
-char* getString(FILE* json) {
-  char buffer[128]; // since strdup will give correct size, could also start smaller and realloc()
-  int c = mygetc(json);
-  // error checking
-  if (c != '"') {
-    message("Error","unexpected string"); // could keep line number as well to impress
-    exit(1);
-  }
-
-  c = mygetc(json); // should be first char in string unless empty string
-  int i = 0;
-  while (c != '"') {
-    buffer[i] = c;
-    c = mygetc(json);
-    i++;
-  }
-  buffer[i] = 0; //terminator
-
-  //return buffer; // can't just return it, strdup will return a copy of it
-  if (VERBOSE) printf("  gS: returning %s\n",buffer);
-  return strdup(buffer);
-}
-
-int parseJSON(char* input_file) {
-  // plain text, so no need for binary mode
-  FILE* json = fopen(input_file,"r");
-
-  // now read the data
-  // skip whitespace until open bracket (he'll put it in there just to trip us up)
-  int c = skipWhitespace(json);
-  // beginning of list
-  if (c != '[') {
-    message("Error","File must begin with [\n");
-  }
-  c = skipWhitespace(json);
-
-  // handle empty lists can also be valid
-  if (c == ']') {
-    message("Info","Empty JSON data");
-    fclose(json);
-    return 1;
-  }
-
-  // find the objects
-  if (c == '{' ) {
-    // parse the object, we know type is first which is nice
-    skip_ws(json);
-    char* key = getString(json);
-    if (strcmp(key,"type") != 0) {
-      message("Error","First key expected to be 'type'\n");
-    }
-    
-    c = skipWhitespace(json);
-    printf("DBG: char is (%c)\n",c);
-    if (c != ':') {
-      message("Error","Unrecognized format, expected ':' between key/value");
-    }
-
-    skip_ws(json);
-    char* type = getString(json);
-    if (strcmp(type, "camera") == 0) {
-      INPUT_FILE_DATA.type = type;
-    } else if (strcmp(type, "sphere") == 0) {
-    } else if (strcmp(type, "plane") == 0) {
-    } else {
-      // unknown type
-      message("Error","Unhandled type");
-    }
-  } else {
-    message("Error","Expected curly brace to open object list");
-  }
-  
-  
-  // successful parse of JSON
-  // make sure to close so the buffer gets written, defined behavior
-  fclose(json);
-  return 0;
-}
 
 /*
   --- message ---
@@ -287,8 +437,8 @@ void help () {
 */
 // TODO: make this more universal
 void freeGlobalMemory () {
-  // free(RGBA_PIXEL_MAP);
-  printf("TODO: free the global memory from any mallocs\n");
+  free(RGB_PIXEL_MAP);
+  free(RGBA_PIXEL_MAP);
 }
 
 /*
@@ -452,8 +602,131 @@ void reportPixelMap (RGBPixel *pm) {
   }
 }
 
-int mygetc (FILE* fh) {
-  int c = fgetc(fh);
-  if (VERBOSE) printf("  mygetc char> (%c)\n",c);
-  return c;
+// helper to print out a JSON_object
+void printJSONObjectStruct (JSON_object jostruct) {
+  printf("type: %s\n",jostruct.type);
+  if (strcmp(jostruct.type,"camera") == 0) {
+    printf(" width: %f\n",jostruct.width);
+    printf("height: %f\n",jostruct.height);
+  } else if (strcmp(jostruct.type,"sphere") == 0) {
+    printf("    color: [%f, %f, %f]\n",jostruct.color.x, jostruct.color.y, jostruct.color.z);
+    printf(" position: [%f, %f, %f]\n",jostruct.position.x, jostruct.position.y, jostruct.position.z);
+    printf("   radius: %f\n",jostruct.radius);
+  } else if (strcmp(jostruct.type,"plane") == 0) {
+    printf("    color: [%f, %f, %f]\n",jostruct.color.x, jostruct.color.y, jostruct.color.z);
+    printf(" position: [%f, %f, %f]\n",jostruct.position.x, jostruct.position.y, jostruct.position.z);
+    printf("   normal: [%f, %f, %f]\n",jostruct.normal.x, jostruct.normal.y, jostruct.normal.z);
+  } else {
+    printf("Error: unrecognized type\n");
+  }
+  printf("\n");
 }
+
+// helper to report the results of a scene parse
+void reportScene () {
+  int len_array = INPUT_FILE_DATA.num_objects;
+  printf("\n\n---------------------\n");
+  message("Info","PARSE RESULTS:");
+  printf("---------------------\n");
+  printf("Processed scene with %d objects:\n\n",len_array+1);
+  for (int i = 0; i <= len_array; i++) {
+    printJSONObjectStruct(INPUT_FILE_DATA.js_objects[i]);
+  }
+}
+
+// helper to store a double onto our JSON object file
+void storeDouble(int obj_count, char* key, double value) {
+  if (VERBOSE) printf("   sD: storing %s,%lf at %d\n",key,value,obj_count);
+
+  // store the actual value, not sure how to say ".key" and get it to evaluate key so need these ifs
+  if (strcmp(key,"width") == 0) {
+    INPUT_FILE_DATA.js_objects[obj_count].width = value;
+  } else if (strcmp(key,"height") == 0) {
+    INPUT_FILE_DATA.js_objects[obj_count].height = value;
+  } else if (strcmp(key,"radius") == 0) {
+    INPUT_FILE_DATA.js_objects[obj_count].radius = value;
+  } else {
+    // This should never happen
+    message("Error","Interally trying to store unknown key type");
+  }
+}
+
+// helper to store a vector onto our JSON object file
+void storeVector(int obj_count, char* key, double* value) {
+  if (VERBOSE) printf("   sV: storing %s at %d\n",key,obj_count);
+  if (strcmp(key,"color") == 0) {
+    INPUT_FILE_DATA.js_objects[obj_count].color.x = value[0];
+    INPUT_FILE_DATA.js_objects[obj_count].color.y = value[1];
+    INPUT_FILE_DATA.js_objects[obj_count].color.z = value[2];
+  } else if (strcmp(key,"position") == 0) {
+    INPUT_FILE_DATA.js_objects[obj_count].position.x = value[0];
+    INPUT_FILE_DATA.js_objects[obj_count].position.y = value[1];
+    INPUT_FILE_DATA.js_objects[obj_count].position.z = value[2];
+  } else if (strcmp(key,"normal") == 0) {
+    INPUT_FILE_DATA.js_objects[obj_count].normal.x = value[0];
+    INPUT_FILE_DATA.js_objects[obj_count].normal.y = value[1];
+    INPUT_FILE_DATA.js_objects[obj_count].normal.z = value[2];
+  } else {
+    // This should never happen
+    message("Error","Interally trying to store unknown vector key type");
+  }
+
+}
+
+// Raycaster function
+void  rayCast(JSON_object *scene, RGBPixel *image) {
+  printf("Rendering raycast %d x %d image to memory ...\n",INPUT_FILE_DATA.width,INPUT_FILE_DATA.height);
+
+  /*
+  // pixel by pixel
+  for () {
+    // object by object
+    for () {
+      // intersection test for all objects
+      // if yes, assign this pixel to the color of the object
+    }
+  }
+  */
+
+  message("TODO","Build this thing!");
+}
+
+// helper function to convert 0 to 1 color scale into 0 to 255 color scale for PPM
+unsigned char shadePixel (double value) {
+  if (value > 1.0) {
+    message("Error","Unsupported max color value, expected between 0 and 1.0");
+  } else {
+    return round(value * 255);
+  }
+}
+
+/*
+in the camera/sphere/plane cases, that's where he would allocat the space for them, plus some
+error checking (lik edoes a sphere have a width, etc...O)
+
+pixel to origin is the ray
+
+  INPUT_FILE_DATA.js_objects[0].type = "camera";
+  INPUT_FILE_DATA.js_objects[0].width = 0.5;
+  INPUT_FILE_DATA.js_objects[0].height = 0.5;
+
+  INPUT_FILE_DATA.js_objects[1].type = "sphere";
+  INPUT_FILE_DATA.js_objects[1].color.x = 1.0;
+  INPUT_FILE_DATA.js_objects[1].color.y = 0;
+  INPUT_FILE_DATA.js_objects[1].color.z = 0;
+  INPUT_FILE_DATA.js_objects[1].position.x = 0;
+  INPUT_FILE_DATA.js_objects[1].position.y = 2;
+  INPUT_FILE_DATA.js_objects[1].position.z = 5;
+  INPUT_FILE_DATA.js_objects[1].radius = 2;
+
+  INPUT_FILE_DATA.js_objects[2].type = "plane";
+  INPUT_FILE_DATA.js_objects[2].color.x = 0;
+  INPUT_FILE_DATA.js_objects[2].color.y = 0;
+  INPUT_FILE_DATA.js_objects[2].color.z = 1.0;
+  INPUT_FILE_DATA.js_objects[2].position.x = 0;
+  INPUT_FILE_DATA.js_objects[2].position.y = 0;
+  INPUT_FILE_DATA.js_objects[2].position.z = 0;
+  INPUT_FILE_DATA.js_objects[2].normal.x = 0;
+  INPUT_FILE_DATA.js_objects[2].normal.y = 1;
+  INPUT_FILE_DATA.js_objects[2].normal.z = 0;
+*/
