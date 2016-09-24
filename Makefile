@@ -21,14 +21,14 @@ clean:
 #############################################
 test1:
 	gcc raycast.c -o raycast
-	./raycast 400 500 test_good_01.json test.out
+	./raycast 400 500 test_good_01.json test.ppm
 
 test2:
 	gcc raycast.c -o raycast
-	./raycast 1000 800 test_good_02.json test.out
+	./raycast 1000 800 test_good_02.json test.ppm
 
 test3:
 	gcc raycast.c -o raycast
-	./raycast 600 480 test_good_03.json test.out
+	./raycast 600 480 test_good_03.json test.ppm
 
 

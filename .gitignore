@@ -55,3 +55,4 @@ Temporary Items
 #*
 *.old
 struct_test.c
+*.ppm

@@ -262,15 +262,15 @@ void readScene(char* filename) {
       if (strcmp(value, "camera") == 0) {
 	message("Info","Processing camera object...");
 	INPUT_FILE_DATA.js_objects[obj_count].type = "camera";
-	INPUT_FILE_DATA.num_objects = obj_count;
+	INPUT_FILE_DATA.num_objects = obj_count + 1;
       } else if (strcmp(value, "sphere") == 0) {
 	message("Info","Processing sphere object...");
 	INPUT_FILE_DATA.js_objects[obj_count].type = "sphere";
-	INPUT_FILE_DATA.num_objects = obj_count;
+	INPUT_FILE_DATA.num_objects = obj_count + 1;
       } else if (strcmp(value, "plane") == 0) {
 	message("Info","Processing plane object...");
 	INPUT_FILE_DATA.js_objects[obj_count].type = "plane";
-	INPUT_FILE_DATA.num_objects = obj_count;
+	INPUT_FILE_DATA.num_objects = obj_count + 1;
       } else {
 	fprintf(stderr, "Error: Unknown type, \"%s\", on line number %d.\n", value, line);
 	exit(1);
@@ -379,6 +379,7 @@ int main(int argc, char *argv[]) {
   rayCast(INPUT_FILE_DATA.js_objects,RGB_PIXEL_MAP);
 
   // write the image
+  writePPM(outfile,&INPUT_FILE_DATA);
   
   // prepare to exit
   freeGlobalMemory();
@@ -628,8 +629,8 @@ void reportScene () {
   printf("\n\n---------------------\n");
   message("Info","PARSE RESULTS:");
   printf("---------------------\n");
-  printf("Processed scene with %d objects:\n\n",len_array+1);
-  for (int i = 0; i <= len_array; i++) {
+  printf("Processed scene with %d objects:\n\n",len_array);
+  for (int i = 0; i < len_array; i++) {
     printJSONObjectStruct(INPUT_FILE_DATA.js_objects[i]);
   }
 }
@@ -675,18 +676,24 @@ void storeVector(int obj_count, char* key, double* value) {
 
 // Raycaster function
 void  rayCast(JSON_object *scene, RGBPixel *image) {
-  printf("Rendering raycast %d x %d image to memory ...\n",INPUT_FILE_DATA.width,INPUT_FILE_DATA.height);
 
-  /*
+  // variables
+  int width = INPUT_FILE_DATA.width;
+  int height = INPUT_FILE_DATA.height;
+  int pixmap_length = width * height;
+  printf("Rendering raycast %d x %d image to memory ...\n",width,height);
+
   // pixel by pixel
-  for () {
+  for (int i = 0; i < pixmap_length; i++) {
     // object by object
-    for () {
+    for (int j = 0; j < INPUT_FILE_DATA.num_objects; j++) {
       // intersection test for all objects
       // if yes, assign this pixel to the color of the object
+      RGB_PIXEL_MAP[i].r = 255;
+      RGB_PIXEL_MAP[i].g = 128;
+      RGB_PIXEL_MAP[i].b = 0;
     }
   }
-  */
 
   message("TODO","Build this thing!");
 }
@@ -706,27 +713,4 @@ error checking (lik edoes a sphere have a width, etc...O)
 
 pixel to origin is the ray
 
-  INPUT_FILE_DATA.js_objects[0].type = "camera";
-  INPUT_FILE_DATA.js_objects[0].width = 0.5;
-  INPUT_FILE_DATA.js_objects[0].height = 0.5;
-
-  INPUT_FILE_DATA.js_objects[1].type = "sphere";
-  INPUT_FILE_DATA.js_objects[1].color.x = 1.0;
-  INPUT_FILE_DATA.js_objects[1].color.y = 0;
-  INPUT_FILE_DATA.js_objects[1].color.z = 0;
-  INPUT_FILE_DATA.js_objects[1].position.x = 0;
-  INPUT_FILE_DATA.js_objects[1].position.y = 2;
-  INPUT_FILE_DATA.js_objects[1].position.z = 5;
-  INPUT_FILE_DATA.js_objects[1].radius = 2;
-
-  INPUT_FILE_DATA.js_objects[2].type = "plane";
-  INPUT_FILE_DATA.js_objects[2].color.x = 0;
-  INPUT_FILE_DATA.js_objects[2].color.y = 0;
-  INPUT_FILE_DATA.js_objects[2].color.z = 1.0;
-  INPUT_FILE_DATA.js_objects[2].position.x = 0;
-  INPUT_FILE_DATA.js_objects[2].position.y = 0;
-  INPUT_FILE_DATA.js_objects[2].position.z = 0;
-  INPUT_FILE_DATA.js_objects[2].normal.x = 0;
-  INPUT_FILE_DATA.js_objects[2].normal.y = 1;
-  INPUT_FILE_DATA.js_objects[2].normal.z = 0;
 */
