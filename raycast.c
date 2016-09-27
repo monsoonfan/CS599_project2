@@ -19,11 +19,12 @@ Issues:
 -------
 
 Questions:
--------
+---------
 - share emacs tricks: match-paren, cursor point/jump, ctrk-k, goto-line
-- colors: is the 1.0 normalized from 255? So 0.5 would be 128, etc?
+- can we support 1 and only 1 camera?
 - positioning of the objects themselves, relative to what?
 - how to pass a parameterized member: 	    INPUT_FILE_DATA.js_objects[obj_count].&key = value;
+- can we include 3dmath.h, or does that need to be inline?
 ---------------------------------------------------------------------------------------
 */
 #include <stdio.h>
@@ -31,6 +32,7 @@ Questions:
 #include <string.h>
 #include <ctype.h>
 #include <math.h>
+
 
 // typdefs
 typedef struct RGBPixel {
@@ -63,12 +65,14 @@ typedef struct x_y_z {
 } x_y_z ;
 
 typedef struct JSON_object {
-  char *type;
+  char *type; // helpful to have both string and number reference for this
+  int  typecode; // 0 = camera, 1 = sphere, 2 = plane
   double width;
   double height;
   x_y_z color;
   x_y_z position;
   x_y_z normal;
+  double center[3];
   double radius;
 } JSON_object ;
 
@@ -82,6 +86,19 @@ typedef struct JSON_file_struct {
   int num_objects;
   JSON_object js_objects[128];
 } JSON_file_struct ;
+
+// inline functions:
+static inline double sqr (double v) {
+  return v * v;
+}
+
+static inline void normalize (double* v) {
+  double len = sqrt(sqr(v[0]) + sqr(v[1]) + sqr(v[2]));
+  v[0] /= len;
+  v[1] /= len;
+  v[2] /= len;
+}
+// END inline functions
 
 // global variables
 int CURRENT_CHAR        = 'a';
@@ -104,6 +121,7 @@ void  printJSONObjectStruct (JSON_object jostruct);
 void  storeDouble(int obj_count, char* key, double value);
 void  storeVector(int obj_count, char* key, double* value);
 void  rayCast(JSON_object *scene, RGBPixel *image);
+double cylinderIntersection(double* Ro, double* Rd, x_y_z C, double r);
 unsigned char shadePixel (double value);
 
 void  help            ();
@@ -112,6 +130,9 @@ char* computeTuplType();
 void  freeGlobalMemory ();
 void  closeAndExit ();
 void  reportScene();
+double getCameraWidth();
+double getCameraHeight();
+
 
 /* 
  ------------------------------------------------------------------
@@ -236,10 +257,18 @@ void readScene(char* filename) {
   skipWSpace(json);
 
   // Find all the objects in the JSON scene file
+  int fail_safe = 0;
   while (1) {
+    /* Error checking */
+    // max supported objects * number of JSON lines per object (with margin of error)
+    fail_safe++;
+    if (fail_safe > 1280) message("Error","Do you have a ']' to terminate your JSON file?");
+    if (obj_count > 128) message("Error","Maximum supported number of JSON objects is 128");
+
+    /* Process file */
     c = fgetc(json);
     if (c == ']') {
-      fprintf(stderr, "Error: This is the worst scene file EVER.\n");
+      message("Error","No objects detected!\n");
       fclose(json);
       return;
     }
@@ -262,14 +291,22 @@ void readScene(char* filename) {
       if (strcmp(value, "camera") == 0) {
 	message("Info","Processing camera object...");
 	INPUT_FILE_DATA.js_objects[obj_count].type = "camera";
+	INPUT_FILE_DATA.js_objects[obj_count].typecode = 0;
 	INPUT_FILE_DATA.num_objects = obj_count + 1;
       } else if (strcmp(value, "sphere") == 0) {
 	message("Info","Processing sphere object...");
 	INPUT_FILE_DATA.js_objects[obj_count].type = "sphere";
+	INPUT_FILE_DATA.js_objects[obj_count].typecode = 1;
 	INPUT_FILE_DATA.num_objects = obj_count + 1;
       } else if (strcmp(value, "plane") == 0) {
 	message("Info","Processing plane object...");
 	INPUT_FILE_DATA.js_objects[obj_count].type = "plane";
+	INPUT_FILE_DATA.js_objects[obj_count].typecode = 2;
+	INPUT_FILE_DATA.num_objects = obj_count + 1;
+      } else if (strcmp(value, "cylinder") == 0) {
+	message("Info","Processing cylinder object...");
+	INPUT_FILE_DATA.js_objects[obj_count].type = "cylinder";
+	INPUT_FILE_DATA.js_objects[obj_count].typecode = 3;
 	INPUT_FILE_DATA.num_objects = obj_count + 1;
       } else {
 	fprintf(stderr, "Error: Unknown type, \"%s\", on line number %d.\n", value, line);
@@ -369,7 +406,7 @@ int main(int argc, char *argv[]) {
   // Read scene - code from class
   readScene(infile);
   
-  // report results (if VERBOSE probably)
+  // report results (TODO: if VERBOSE)
   reportScene();
 
   // initialize the image buffer
@@ -379,7 +416,7 @@ int main(int argc, char *argv[]) {
   rayCast(INPUT_FILE_DATA.js_objects,RGB_PIXEL_MAP);
 
   // write the image
-  writePPM(outfile,&INPUT_FILE_DATA);
+  writePPM(outfile,&OUTPUT_FILE_DATA);
   
   // prepare to exit
   freeGlobalMemory();
@@ -675,26 +712,124 @@ void storeVector(int obj_count, char* key, double* value) {
 }
 
 // Raycaster function
+// builds the image based on a scene
 void  rayCast(JSON_object *scene, RGBPixel *image) {
 
+  ////////////
   // variables
-  int width = INPUT_FILE_DATA.width;
-  int height = INPUT_FILE_DATA.height;
-  int pixmap_length = width * height;
-  printf("Rendering raycast %d x %d image to memory ...\n",width,height);
+  ////////////
+  int intersect = 0; // dummy var while intersection tests not working
+  // number of pixels that represent height/width
+  int M = INPUT_FILE_DATA.height;
+  int N = INPUT_FILE_DATA.width;
+  int pixmap_length = M * N;
+  // this represents the center of the view plane
+  double cx = 0;
+  double cy = 0;
+  // make a view plane according to the (first) camera object in the JSON
+  double w = getCameraWidth();
+  double h = getCameraHeight();
+  // height/width of each pixel
+  double pixwidth = w / N;
+  double pixheight = h / M;
+  int i = 0; // pixelmap counter, since my pixelmap is a flat array
+  
+  printf("Raycasting %d x %d image to memory ...\n",N,M);
 
-  // pixel by pixel
-  for (int i = 0; i < pixmap_length; i++) {
-    // object by object
-    for (int j = 0; j < INPUT_FILE_DATA.num_objects; j++) {
-      // intersection test for all objects
-      // if yes, assign this pixel to the color of the object
-      RGB_PIXEL_MAP[i].r = 255;
-      RGB_PIXEL_MAP[i].g = 128;
-      RGB_PIXEL_MAP[i].b = 0;
+  //////////////////////////////////////
+  // copy of psuedo code from text/class
+  //////////////////////////////////////
+  for (int y = 0; y < M; y += 1) {
+    for (int x = 0; x < N; x += 1) {
+      // origin
+      double Ro[3] = {0,0,0}; // vector that represents a point that represents the origin
+      // direction
+      // Rd = normalize(P - Ro), origin in 0 so skip that, but need to normalize
+      // this won't work prior to C 1999 to evaluate in the static initializer
+      double Rd[3] = {
+	cx - (w/2) + pixwidth * ( x + 0.5),
+	cy - (h/2) + pixheight * ( y + 0.5),
+	1
+      };
+
+      // next, need to make Rd so that it's actually normalized
+      normalize(Rd);
+
+      // structure of every ray tracer you will ever encounter
+      // go over all x/y values for a scene and check for intersections
+      double best_t = INFINITY;
+      int    best_t_index = 129;
+
+      for (int o = 0; o < INPUT_FILE_DATA.num_objects; o += 1) {
+	//printf("DBG: o(%d) against no(%d)\n",o,INPUT_FILE_DATA.num_objects);
+	// t stores if we have an intersection or not
+	double t = 0;
+
+	switch(INPUT_FILE_DATA.js_objects[o].typecode) {
+	case 0:
+	  //	  message("Info","Skipping camera object...");
+	  break;
+	case 1:
+	  //message("Info","processing sphere...");
+	  break;
+	case 2:	
+	  //message("Info","processing plane...");
+	  break;
+	case 3:
+	  //	  t = cylinder_intersection(Ro,Rd,objects[o]->cylinder.center,objects[o]->cylinder.radius);
+	  t = cylinderIntersection(Ro,Rd,
+				   INPUT_FILE_DATA.js_objects[o].position,
+				   INPUT_FILE_DATA.js_objects[o].radius);
+	  break;
+	default:
+	  // horrible error
+	  message("Error","Unhandled typecode, camera/plane/sphere are supported");
+	}
+	if (t > 0 && t < best_t) {
+	  best_t = t;
+	  best_t_index = o;
+	}
+      }
+      // Now look at the t value and see if there was an intersection
+      // remember that you could have multiple objects in from of each other, check for the smaller of the
+      // t values, that hit first, color that one
+      if (best_t > 0 && best_t != INFINITY) {
+	printf("#");
+	RGB_PIXEL_MAP[i].r = shadePixel(scene[best_t_index].color.x);
+	RGB_PIXEL_MAP[i].g = shadePixel(scene[best_t_index].color.y);
+	RGB_PIXEL_MAP[i].b = shadePixel(scene[best_t_index].color.z);
+      } else {
+	printf(".");
+	RGB_PIXEL_MAP[i].r = shadePixel(1);
+	RGB_PIXEL_MAP[i].g = shadePixel(1);
+	RGB_PIXEL_MAP[i].b = shadePixel(1);
+      }
+      i++; // increment the pixelmap counter
     }
+    printf("\n");
   }
 
+
+
+  /*
+  // loop over each pixel, do this in a single loop as opposed to x and y since pixmap is flat
+  for (int i = 0; i < pixmap_length; i++) {
+    // loop over each object
+    for (int j = 0; j < INPUT_FILE_DATA.num_objects; j++) {
+      // intersection test for all objects?
+      if (intersect) {
+	RGB_PIXEL_MAP[i].r = shadePixel(scene[j].color.x);
+	RGB_PIXEL_MAP[i].g = shadePixel(scene[j].color.y);
+	RGB_PIXEL_MAP[i].b = shadePixel(scene[j].color.z);
+      } else {
+	RGB_PIXEL_MAP[i].r = shadePixel(1);
+	RGB_PIXEL_MAP[i].g = shadePixel(1);
+	RGB_PIXEL_MAP[i].b = shadePixel(1);
+      }
+    }
+  }
+  */
+  
   message("TODO","Build this thing!");
 }
 
@@ -707,10 +842,72 @@ unsigned char shadePixel (double value) {
   }
 }
 
+// Cylinder intersection code (from example in class) 
+double cylinderIntersection(double* Ro, double* Rd, x_y_z C, double r) {
+  // Step 1. Find the equation for the object we are interested in
+  // Step 2. Parameterize the equation with a center point if needed
+  // Step 3. Substitute the equation for ray into our object equation
+  // Step 4. Solve for t.
+  //      4a. Rewrite the equation (flatten, get rid of parens). (maple/mathmatica will solve this, or algebra)
+  //      4b. rewrite the equation in terms of t, want to solve for t
+  // Step 5. Use the quadratic equation to solve for t
+  double a = (sqr(Rd[0]) + sqr(Rd[2])); // remember that x/y/z are in array form
+  double b = (2 * (Ro[0] * Rd[0] - Rd[0] * C.x + Ro[2] * Rd[2] - Rd[2] * C.z));
+  double c = sqr(Ro[0]) - 2*Ro[0] * C.x + sqr(C.x) + sqr(Ro[2]) - 2*Ro[2] * C.z + sqr(C.z) - sqr(r);
+
+  // determinant, remember the negative version is not real, imaginary, not 
+  double det = sqr(b) - 4 * a * c;
+  if (det < 0 ) return -1; // this is the signal that there was not an intersection
+
+  // since we are using it more than once
+  det = sqrt(det);
+  
+  double t0 = (-b - det) / (2*a);
+  if (t0 > 0) return t0; // smaller/lesser of the 2 values, needs to come first
+
+  double t1 = (-b + det) / (2*a);
+  if (t1 > 0) return t1;
+
+  // this is a default case if we have no intersection, could also just return t1, but this accounts
+  // for "numeric stability" as numbers become very close to 0
+  return -1;
+}
+
+// Helper functions to find the first camera object and get it's specified width/height
+double getCameraWidth() {
+  double w = 0.0;
+  for (int o = 0; o < INPUT_FILE_DATA.num_objects; o++) {
+    if (INPUT_FILE_DATA.js_objects[o].typecode == 0) {
+      w = INPUT_FILE_DATA.js_objects[o].width;
+      if (w > 0) {
+	printf("Info: Found camera object width %f\n",w);
+	return w;
+      } else {
+	message("Error","Unsupported camera width less than zero");
+      }
+    }
+  }
+  return w;
+}
+double getCameraHeight() {
+  double h = 0.0;
+  for (int o = 0; o < INPUT_FILE_DATA.num_objects; o++) {
+    if (INPUT_FILE_DATA.js_objects[o].typecode == 0) {
+      h = INPUT_FILE_DATA.js_objects[o].height;
+      if (h > 0) {
+	printf("Info: Found camera object height %f\n",h);
+	return h;
+      } else {
+	message("Error","Unsupported camera height less than zero");
+      }
+    }
+  }
+  return h;
+}
+
 /*
-in the camera/sphere/plane cases, that's where he would allocat the space for them, plus some
-error checking (lik edoes a sphere have a width, etc...O)
+TODO:
+error checking (like does a sphere have a width, etc...)
 
 pixel to origin is the ray
-
 */

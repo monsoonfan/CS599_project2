@@ -29,6 +29,8 @@ test2:
 
 test3:
 	gcc raycast.c -o raycast
-	./raycast 600 480 test_good_03.json test.ppm
+	./raycast 60 30 test_good_03.json test.ppm
 
-
+test4:
+	gcc raycast.c -o raycast
+	./raycast 20 20 test_good_04.json test.ppm
