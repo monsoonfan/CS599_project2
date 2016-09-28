@@ -20,12 +20,6 @@ Issues:
 
 Questions:
 ---------
-- share emacs tricks: match-paren, cursor point/jump, ctrk-k, goto-line
-- can we support 1 and only 1 camera?
-- positioning of the objects themselves, relative to what?
-- how to pass a parameterized member: 	    INPUT_FILE_DATA.js_objects[obj_count].&key = value;
-- can we include 3dmath.h, or does that need to be inline?
-- parser has 2 issues, can't have , after last object, can't have , after last object token (is this desired)
 ---------------------------------------------------------------------------------------
 */
 #include <stdio.h>
@@ -88,16 +82,28 @@ typedef struct JSON_file_struct {
   JSON_object js_objects[128];
 } JSON_file_struct ;
 
+typedef double* V3;
+
 // inline functions:
 static inline double sqr (double v) {
   return v * v;
 }
 
-static inline void normalize (double* v) {
+static inline void vNormalize (double* v) {
   double len = sqrt(sqr(v[0]) + sqr(v[1]) + sqr(v[2]));
   v[0] /= len;
   v[1] /= len;
   v[2] /= len;
+}
+
+static inline void vSubtract(V3 a, V3 b, V3 c) {
+  c[0] = a[0] - b[0];
+  c[1] = a[1] - b[1];
+  c[2] = a[2] - b[2];
+}
+
+static inline double vDot(V3 a, V3 b) {
+  return a[0]*b[0] + a[1]*b[1] + a[2]*b[2];
 }
 // END inline functions
 
@@ -105,6 +111,7 @@ static inline void normalize (double* v) {
 int CURRENT_CHAR        = 'a';
 int OUTPUT_MAGIC_NUMBER = 6; // default to P6 PPM format
 int VERBOSE             = 0; // controls logfile message level
+int ASCII_IMAGE         = 0; // controls if there is an ascii image printed to terminal while raycasting
 
 // global data structures
 JSON_file_struct    INPUT_FILE_DATA;
@@ -124,6 +131,7 @@ void  storeDouble(int obj_count, char* key, double value);
 void  storeVector(int obj_count, char* key, double* value);
 void  rayCast(JSON_object *scene, RGBPixel *image);
 double cylinderIntersection(double* Ro, double* Rd, x_y_z C, double r);
+double sphereIntersection  (double* Ro, double* Rd, x_y_z C, double r);
 unsigned char shadePixel (double value);
 
 void  help            ();
@@ -758,7 +766,7 @@ void  rayCast(JSON_object *scene, RGBPixel *image) {
       };
 
       // next, need to make Rd so that it's actually normalized
-      normalize(Rd);
+      vNormalize(Rd);
 
       // structure of every ray tracer you will ever encounter
       // go over all x/y values for a scene and check for intersections
@@ -772,10 +780,13 @@ void  rayCast(JSON_object *scene, RGBPixel *image) {
 
 	switch(INPUT_FILE_DATA.js_objects[o].typecode) {
 	case 0:
-	  //	  message("Info","Skipping camera object...");
+	  //message("Info","Skipping camera object...");
 	  break;
 	case 1:
 	  //message("Info","processing sphere...");
+	  t = sphereIntersection(Ro,Rd,
+				 INPUT_FILE_DATA.js_objects[o].position,
+				 INPUT_FILE_DATA.js_objects[o].radius);
 	  break;
 	case 2:	
 	  //message("Info","processing plane...");
@@ -787,7 +798,6 @@ void  rayCast(JSON_object *scene, RGBPixel *image) {
 				   INPUT_FILE_DATA.js_objects[o].radius);
 	  break;
 	default:
-	  // horrible error
 	  message("Error","Unhandled typecode, camera/plane/sphere are supported");
 	}
 	if (t > 0 && t < best_t) {
@@ -799,41 +809,20 @@ void  rayCast(JSON_object *scene, RGBPixel *image) {
       // remember that you could have multiple objects in from of each other, check for the smaller of the
       // t values, that hit first, color that one
       if (best_t > 0 && best_t != INFINITY) {
-	printf("#");
+	if (ASCII_IMAGE) printf("#");
 	RGB_PIXEL_MAP[i].r = shadePixel(scene[best_t_index].color.x);
 	RGB_PIXEL_MAP[i].g = shadePixel(scene[best_t_index].color.y);
 	RGB_PIXEL_MAP[i].b = shadePixel(scene[best_t_index].color.z);
       } else {
-	printf(".");
+	if (ASCII_IMAGE) printf(".");
 	RGB_PIXEL_MAP[i].r = shadePixel(1);
 	RGB_PIXEL_MAP[i].g = shadePixel(1);
 	RGB_PIXEL_MAP[i].b = shadePixel(1);
       }
       i++; // increment the pixelmap counter
     }
-    printf("\n");
+    if (ASCII_IMAGE) printf("\n");
   }
-
-
-
-  /*
-  // loop over each pixel, do this in a single loop as opposed to x and y since pixmap is flat
-  for (int i = 0; i < pixmap_length; i++) {
-    // loop over each object
-    for (int j = 0; j < INPUT_FILE_DATA.num_objects; j++) {
-      // intersection test for all objects?
-      if (intersect) {
-	RGB_PIXEL_MAP[i].r = shadePixel(scene[j].color.x);
-	RGB_PIXEL_MAP[i].g = shadePixel(scene[j].color.y);
-	RGB_PIXEL_MAP[i].b = shadePixel(scene[j].color.z);
-      } else {
-	RGB_PIXEL_MAP[i].r = shadePixel(1);
-	RGB_PIXEL_MAP[i].g = shadePixel(1);
-	RGB_PIXEL_MAP[i].b = shadePixel(1);
-      }
-    }
-  }
-  */
 }
 
 // helper function to convert 0 to 1 color scale into 0 to 255 color scale for PPM
@@ -856,6 +845,44 @@ unsigned char shadePixel (double value) {
 //      4b. rewrite the equation in terms of t, want to solve for t
 // Step 5. Use the quadratic equation (if relevant) to solve for t
 /////////////////////////
+
+// Sphere intersection code (from http://www.siggraph.org/education/materials/HyperGraph/raytrace/rtinter1.htm)
+double sphereIntersection(double* Ro, double* Rd, x_y_z C, double r) {
+  // Xhit = pr + (tclose - a)*ur from the notes, same as
+  // S = the set of points[xs, ys, zs], where (xs - xc)2 + (ys - yc)2 + (zs - zc)2 = r^2
+  // (Ro[0] + Rd[0] * t - C.X)2 + (Ro[1] + Rd[1] * t - C.Y)2 + (Ro[2] + Rd[2] * t - C.Z)2 = r^2
+  // or A*t^2 + B*t + C = 0
+  double a = sqr(Rd[0]) + sqr(Rd[1]) + sqr(Rd[2]); // with normalized ray, should always be 1
+  double b = 2 * (Rd[0] * (Ro[0] - C.x) + Rd[1] * (Ro[1] - C.y) + Rd[2] * (Ro[2] - C.z));
+  double c = sqr(Ro[0] - C.x) + sqr(Ro[1] - C.y) + sqr(Ro[2] - C.z) - sqr(r);
+
+  double det = sqr(b) - 4 * a * c;
+  if (det < 0) return -1;
+
+  // take the square root
+  det = sqrt(det);
+  
+  //t0, t1 = (- B + (B^2 - 4*C)^1/2) / 2 where t0 is for (-) and t1 is for (+)
+  // compute t0, if positive, this is the smaller of 2 intersections, we are done, return it
+  double t0 = (-b - det) / (2 * a);
+  if (t0 > 0) return t0;
+
+  double t1 = (-b + det) / (2 * a);
+  if (t1 > 0) return t1;
+
+  // no intersection if we fall through to here
+  return -1;
+}
+
+// Sphere intersection code (from notes)
+double planeIntersection(double* Ro, double* Rd, x_y_z P, x_y_z n) {
+  // t = (n dot (Pr - Po))/(n dot Ur)
+  double Pr = 1;
+  double Po = 1;
+  int Ur = 1;
+  return -1;
+}
+
 // Cylinder intersection code (from example in class) 
 double cylinderIntersection(double* Ro, double* Rd, x_y_z C, double r) {
   // x^2 + z^2 = r^2   using z instead of y will make it go up/down, instead of looking head on
@@ -881,20 +908,7 @@ double cylinderIntersection(double* Ro, double* Rd, x_y_z C, double r) {
   return -1;
 }
 
-// Sphere intersection code (from notes)
-/*
-double sphereIntersection(double* Ro, double* Rd, x_y_z P, double r) {
-  // Xhit = pr + (tclose - a)*ur:
-  return -1;
-}
-
-// Sphere intersection code (from notes)
-double planeIntersection(double* Ro, double* Rd, x_y_z P, double r) {
-  // t = (n dot (Pr - Po))/(n dot Ur)
-
-  return -1;
-}
-*/
+// Quadratic intersection code (from siggraph)
 
 
 // Helper functions to find the first camera object and get it's specified width/height
@@ -935,12 +949,14 @@ void checkJSON (JSON_object *object) {
   // variables
   
   // code body
+  // TODO: finish error checking once it's known how to check for existence
   for (int o = 0; o < INPUT_FILE_DATA.num_objects; o++) {
     switch(object[o].typecode) {
     case 0: // camera
       if (!object[o].width || !object[o].height)
 	message("Error","Camera object must have width and height properties");
-      if (object[o].radius || sizeof(object[o].normal) > 0 || sizeof(object[o].color) > 0)
+      //      if (object[o].radius || sizeof(object[o].normal) > 0 || sizeof(object[o].color) > 0)
+      if (object[o].radius)
 	message("Info","Ignoring camera object properties in excess of width/height");
       break;
     case 1: // sphere

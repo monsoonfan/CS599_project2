@@ -29,11 +29,15 @@ test2:
 
 test3:
 	gcc raycast.c -o raycast
-	./raycast 60 30 test_good_03.json test.ppm
+	./raycast 600 500 test_good_03.json test.ppm
 
 test4:
 	gcc raycast.c -o raycast
-	./raycast 60 30 test_good_04.json test.ppm
+	./raycast 600 500 test_good_04.json test.ppm
+
+testgood.%:
+	gcc raycast.c -o raycast
+	./raycast 60 30 test_good_$*.json test.ppm
 
 testbad.%:
 	gcc raycast.c -o raycast
