@@ -25,6 +25,7 @@ Questions:
 - positioning of the objects themselves, relative to what?
 - how to pass a parameterized member: 	    INPUT_FILE_DATA.js_objects[obj_count].&key = value;
 - can we include 3dmath.h, or does that need to be inline?
+- parser has 2 issues, can't have , after last object, can't have , after last object token (is this desired)
 ---------------------------------------------------------------------------------------
 */
 #include <stdio.h>
@@ -117,6 +118,7 @@ void  message         (char message_code[],   char message[]        );
 void  writePPMHeader  (FILE* fh              );
 void  reportPPMStruct (PPM_file_struct *input);
 void  reportPixelMap  (RGBPixel *pm          );
+void  checkJSON       (JSON_object *scene);
 void  printJSONObjectStruct (JSON_object jostruct);
 void  storeDouble(int obj_count, char* key, double value);
 void  storeVector(int obj_count, char* key, double* value);
@@ -406,6 +408,9 @@ int main(int argc, char *argv[]) {
   // Read scene - code from class
   readScene(infile);
   
+  // error checking
+  checkJSON(INPUT_FILE_DATA.js_objects);
+
   // report results (TODO: if VERBOSE)
   reportScene();
 
@@ -829,8 +834,6 @@ void  rayCast(JSON_object *scene, RGBPixel *image) {
     }
   }
   */
-  
-  message("TODO","Build this thing!");
 }
 
 // helper function to convert 0 to 1 color scale into 0 to 255 color scale for PPM
@@ -842,15 +845,20 @@ unsigned char shadePixel (double value) {
   }
 }
 
+/////////////////////////
+// Intersection checkers
+/////////////////////////
+// Step 1. Find the equation for the object we are interested in
+// Step 2. Parameterize the equation with a center point if needed
+// Step 3. Substitute the equation for ray into our object equation
+// Step 4. Solve for t.
+//      4a. Rewrite the equation (flatten, get rid of parens). (maple/mathmatica will solve this, or algebra)
+//      4b. rewrite the equation in terms of t, want to solve for t
+// Step 5. Use the quadratic equation (if relevant) to solve for t
+/////////////////////////
 // Cylinder intersection code (from example in class) 
 double cylinderIntersection(double* Ro, double* Rd, x_y_z C, double r) {
-  // Step 1. Find the equation for the object we are interested in
-  // Step 2. Parameterize the equation with a center point if needed
-  // Step 3. Substitute the equation for ray into our object equation
-  // Step 4. Solve for t.
-  //      4a. Rewrite the equation (flatten, get rid of parens). (maple/mathmatica will solve this, or algebra)
-  //      4b. rewrite the equation in terms of t, want to solve for t
-  // Step 5. Use the quadratic equation to solve for t
+  // x^2 + z^2 = r^2   using z instead of y will make it go up/down, instead of looking head on
   double a = (sqr(Rd[0]) + sqr(Rd[2])); // remember that x/y/z are in array form
   double b = (2 * (Ro[0] * Rd[0] - Rd[0] * C.x + Ro[2] * Rd[2] - Rd[2] * C.z));
   double c = sqr(Ro[0]) - 2*Ro[0] * C.x + sqr(C.x) + sqr(Ro[2]) - 2*Ro[2] * C.z + sqr(C.z) - sqr(r);
@@ -872,6 +880,22 @@ double cylinderIntersection(double* Ro, double* Rd, x_y_z C, double r) {
   // for "numeric stability" as numbers become very close to 0
   return -1;
 }
+
+// Sphere intersection code (from notes)
+/*
+double sphereIntersection(double* Ro, double* Rd, x_y_z P, double r) {
+  // Xhit = pr + (tclose - a)*ur:
+  return -1;
+}
+
+// Sphere intersection code (from notes)
+double planeIntersection(double* Ro, double* Rd, x_y_z P, double r) {
+  // t = (n dot (Pr - Po))/(n dot Ur)
+
+  return -1;
+}
+*/
+
 
 // Helper functions to find the first camera object and get it's specified width/height
 double getCameraWidth() {
@@ -905,9 +929,41 @@ double getCameraHeight() {
   return h;
 }
 
-/*
-TODO:
-error checking (like does a sphere have a width, etc...)
-
-pixel to origin is the ray
-*/
+// helper function for JSON error checking (like does a sphere have a width, etc...)
+void checkJSON (JSON_object *object) {
+  message("Info","Checking JSON for errors...");
+  // variables
+  
+  // code body
+  for (int o = 0; o < INPUT_FILE_DATA.num_objects; o++) {
+    switch(object[o].typecode) {
+    case 0: // camera
+      if (!object[o].width || !object[o].height)
+	message("Error","Camera object must have width and height properties");
+      if (object[o].radius || sizeof(object[o].normal) > 0 || sizeof(object[o].color) > 0)
+	message("Info","Ignoring camera object properties in excess of width/height");
+      break;
+    case 1: // sphere
+      //      if (!object[o].radius || !(object[o].position.x > sizeof(object[o].position)) || !object[o].color.x)
+      if (!object[o].radius)      
+	message("Error","Sphere object is missing radius, position, or color");
+      if (object[o].width || object[o].height || sizeof(object[o].normal) > 0)
+	message("Info","Ignoring sphere object properties in excess of radius/position/color");
+      break;
+    case 2: // plane
+      /*
+      if (sizeof(object[o].normal) == 0 || !object[o].position || !object[o].color)
+	message("Error","Plane object is missing normal, position, or color");
+      if (object[o].width || object[o].height || object[o].radius)
+	message("Info","Ignoring plane object properties in excess of normal/position/color");
+      */
+      break;
+    case 3: // cylinder
+      break;
+    default:
+      message("Error","Un-caught error, was missed during parsing");
+    }
+  }
+  message("Info","Done checking JSON for errors...");
+}
+  
