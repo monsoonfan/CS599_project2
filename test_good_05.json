@@ -1,0 +1,34 @@
+[
+{
+"type": "camera",
+"width": 0.7,
+"height": 0.7
+},
+{
+"type": "quadric",
+"color": [1.0, 0.5, 0.25],
+"position": [-2, 0, 50],
+    "A": 2,
+    "B": 3,
+    "C": 5,
+    "D": 4,
+    "E": 6,
+    "F": 7,
+    "G": 1,
+    "H": 0,
+    "I": 3,
+    "J": 2
+},
+{
+"type": "sphere",
+"color": [0, 0.5, 0.25],
+"position": [3, 0, 60],
+"radius": 5
+},
+{
+"type": "cylinder",
+"color": [1.0, 0, 0],
+"position": [7, 0, 70],
+"radius": 4.5
+}
+]

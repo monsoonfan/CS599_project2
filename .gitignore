@@ -56,3 +56,6 @@ Temporary Items
 *.old
 struct_test.c
 *.ppm
+3dmath.h
+3dmath_jdp.h
+ascii_tracer.c

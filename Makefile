@@ -26,6 +26,7 @@ test1:
 test2:
 	gcc raycast.c -o raycast
 	./raycast 1000 800 test_good_02.json test.ppm
+	emacs test.ppm
 
 test3:
 	gcc raycast.c -o raycast
@@ -34,6 +35,11 @@ test3:
 test4:
 	gcc raycast.c -o raycast
 	./raycast 600 500 test_good_04.json test.ppm
+
+test5:
+	gcc raycast.c -o raycast
+	./raycast 1000 800 test_good_05.json test.ppm
+	emacs test.ppm
 
 testgood.%:
 	gcc raycast.c -o raycast

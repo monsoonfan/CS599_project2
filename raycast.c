@@ -20,6 +20,9 @@ Issues:
 
 Questions:
 ---------
+- should we support planes that have a [1,0,0] normal?
+- 1 or 2 sided planes? (what to do when plane is facing away from the ray)
+
 ---------------------------------------------------------------------------------------
 */
 #include <stdio.h>
@@ -59,9 +62,22 @@ typedef struct x_y_z {
   double z;
 } x_y_z ;
 
+typedef struct A_J {
+  double A;
+  double B;
+  double C;
+  double D;
+  double E;
+  double F;
+  double G;
+  double H;
+  double I;
+  double J;
+} A_J ;
+
 typedef struct JSON_object {
   char *type; // helpful to have both string and number reference for this
-  int  typecode; // 0 = camera, 1 = sphere, 2 = plane
+  int  typecode; // 0 = camera, 1 = sphere, 2 = plane, 3 = cylinder, 4 = quadric
   double width;
   double height;
   x_y_z color;
@@ -69,6 +85,7 @@ typedef struct JSON_object {
   x_y_z normal;
   double center[3];
   double radius;
+  A_J coeffs;    // quadric coefficients
 } JSON_object ;
 
 // This may not be the best approach, and it's certainly not most efficient - to have an array that
@@ -94,6 +111,12 @@ static inline void vNormalize (double* v) {
   v[0] /= len;
   v[1] /= len;
   v[2] /= len;
+}
+
+static inline void vAdd(V3 a, V3 b, V3 c) {
+  c[0] = a[0] + b[0];
+  c[1] = a[1] + b[1];
+  c[2] = a[2] + b[2];
 }
 
 static inline void vSubtract(V3 a, V3 b, V3 c) {
@@ -130,8 +153,12 @@ void  printJSONObjectStruct (JSON_object jostruct);
 void  storeDouble(int obj_count, char* key, double value);
 void  storeVector(int obj_count, char* key, double* value);
 void  rayCast(JSON_object *scene, RGBPixel *image);
-double cylinderIntersection(double* Ro, double* Rd, x_y_z C, double r);
 double sphereIntersection  (double* Ro, double* Rd, x_y_z C, double r);
+double planeIntersection   (double* Ro, double* Rd, x_y_z C, x_y_z N);
+double quadricIntersection (double* Ro, double* Rd, x_y_z C, A_J c);
+double cylinderIntersection(double* Ro, double* Rd, x_y_z C, double r);
+
+void   convertXYZ (x_y_z xyz, double* array);
 unsigned char shadePixel (double value);
 
 void  help            ();
@@ -318,6 +345,11 @@ void readScene(char* filename) {
 	INPUT_FILE_DATA.js_objects[obj_count].type = "cylinder";
 	INPUT_FILE_DATA.js_objects[obj_count].typecode = 3;
 	INPUT_FILE_DATA.num_objects = obj_count + 1;
+      } else if (strcmp(value, "quadric") == 0) {
+	message("Info","Processing quadric object...");
+	INPUT_FILE_DATA.js_objects[obj_count].type = "quadric";
+	INPUT_FILE_DATA.js_objects[obj_count].typecode = 4;
+	INPUT_FILE_DATA.num_objects = obj_count + 1;
       } else {
 	fprintf(stderr, "Error: Unknown type, \"%s\", on line number %d.\n", value, line);
 	exit(1);
@@ -343,7 +375,18 @@ void readScene(char* filename) {
 	  //
 	  if ((strcmp(key, "width") == 0) ||
 	      (strcmp(key, "height") == 0) ||
-	      (strcmp(key, "radius") == 0)) {
+	      (strcmp(key, "radius") == 0) ||
+	      (strcmp(key, "A") == 0) ||
+	      (strcmp(key, "B") == 0) ||
+	      (strcmp(key, "C") == 0) ||
+	      (strcmp(key, "D") == 0) ||
+	      (strcmp(key, "E") == 0) ||
+	      (strcmp(key, "F") == 0) ||
+	      (strcmp(key, "G") == 0) ||
+	      (strcmp(key, "H") == 0) ||
+	      (strcmp(key, "I") == 0) ||
+	      (strcmp(key, "J") == 0)
+	      ) {
 	    double value = nextNumber(json);
 	    storeDouble(obj_count,key,value);
 	  } else if ((strcmp(key, "color") == 0) ||
@@ -696,6 +739,26 @@ void storeDouble(int obj_count, char* key, double value) {
     INPUT_FILE_DATA.js_objects[obj_count].height = value;
   } else if (strcmp(key,"radius") == 0) {
     INPUT_FILE_DATA.js_objects[obj_count].radius = value;
+  } else if (strcmp(key, "A") == 0) {
+    INPUT_FILE_DATA.js_objects[obj_count].coeffs.A = value;
+  } else if (strcmp(key, "B") == 0) {
+    INPUT_FILE_DATA.js_objects[obj_count].coeffs.B = value;
+  } else if (strcmp(key, "C") == 0) {
+    INPUT_FILE_DATA.js_objects[obj_count].coeffs.C = value;
+  } else if (strcmp(key, "D") == 0) {
+    INPUT_FILE_DATA.js_objects[obj_count].coeffs.D = value;
+  } else if (strcmp(key, "E") == 0) {
+    INPUT_FILE_DATA.js_objects[obj_count].coeffs.E = value;
+  } else if (strcmp(key, "F") == 0) {
+    INPUT_FILE_DATA.js_objects[obj_count].coeffs.F = value;
+  } else if (strcmp(key, "G") == 0) {
+    INPUT_FILE_DATA.js_objects[obj_count].coeffs.G = value;
+  } else if (strcmp(key, "H") == 0) {
+    INPUT_FILE_DATA.js_objects[obj_count].coeffs.H = value;
+  } else if (strcmp(key, "I") == 0) {
+    INPUT_FILE_DATA.js_objects[obj_count].coeffs.I = value;
+  } else if (strcmp(key, "J") == 0) {
+    INPUT_FILE_DATA.js_objects[obj_count].coeffs.J = value;
   } else {
     // This should never happen
     message("Error","Interally trying to store unknown key type");
@@ -790,12 +853,20 @@ void  rayCast(JSON_object *scene, RGBPixel *image) {
 	  break;
 	case 2:	
 	  //message("Info","processing plane...");
+	  t = planeIntersection(Ro,Rd,
+				 INPUT_FILE_DATA.js_objects[o].position,
+				 INPUT_FILE_DATA.js_objects[o].normal);
 	  break;
 	case 3:
 	  //	  t = cylinder_intersection(Ro,Rd,objects[o]->cylinder.center,objects[o]->cylinder.radius);
 	  t = cylinderIntersection(Ro,Rd,
 				   INPUT_FILE_DATA.js_objects[o].position,
 				   INPUT_FILE_DATA.js_objects[o].radius);
+	  break;
+	case 4:
+	  t = quadricIntersection(Ro,Rd,
+				   INPUT_FILE_DATA.js_objects[o].position,
+				   INPUT_FILE_DATA.js_objects[o].coeffs);
 	  break;
 	default:
 	  message("Error","Unhandled typecode, camera/plane/sphere are supported");
@@ -875,12 +946,39 @@ double sphereIntersection(double* Ro, double* Rd, x_y_z C, double r) {
 }
 
 // Sphere intersection code (from notes)
-double planeIntersection(double* Ro, double* Rd, x_y_z P, x_y_z n) {
-  // t = (n dot (Pr - Po))/(n dot Ur)
-  double Pr = 1;
-  double Po = 1;
-  int Ur = 1;
-  return -1;
+// arguments are: the ray (origin/direction), center of the plane, normal of the plan
+// TODO: apparently not working properly
+double planeIntersection(double* Ro, double* Rd, x_y_z C, x_y_z N) {
+  // t = (n dot (Pr - Po))/(n dot Ur) or, from siggraph:
+  // Ax + By + Cz + D = 0, which becomes the following after being centered and plugging in ray equation
+  // t = -(AX0 + BY0 + CZ0 + D) / (AXd + BYd + CZd)
+  // t = -(Pn� R0 + D) / (Pn � Rd)
+
+  // Convert some values from x_y_z struct format to V3 format for 3d math
+  double n[3];
+  double c[3];
+  convertXYZ(N,n);
+  convertXYZ(C,c);
+
+  // if Vd = (Pn � Rd) = 0, no intersection, so compute it first and return if no intersection
+  double Vd = vDot(n,Rd);
+  //printf("Vd: %f\n",Vd);
+  if (Vd = 0) return -1;
+  if (Vd > 0) return -1; // TODO determine this case
+
+  double origin[3] = {0, 0, 0}; // always assume this for origin
+  // distance is a scalar (sqrt(sqr(x),...)
+  // dot product of n,Ro is a scalar, so that addition is standar addition
+  double d;
+  d = sqrt(sqr(c[0] + origin[0]) + sqr(c[1] + origin[1]) + sqr(c[2] + origin[2]));
+  double V0 = -(vDot(n,Ro) + d);
+  double t = V0 / d;
+  if (t > 0) return -1; // plane intersection is behind origin, ignore it
+
+  // if we got this far, plane intersects the ray in front of origin and faces the ray
+  // compute the intersection point: Pi = [Xi Yi Zi] = [X0 + Xd * t Y0 + Yd * t Z0 + Zd * t]
+  // actually, who cares about the intersection we have distance t along the ray, so we are good
+  return t;
 }
 
 // Cylinder intersection code (from example in class) 
@@ -908,8 +1006,35 @@ double cylinderIntersection(double* Ro, double* Rd, x_y_z C, double r) {
   return -1;
 }
 
-// Quadratic intersection code (from siggraph)
+// Quadric intersection code (from siggraph)
+double quadricIntersection(double* Ro, double* Rd, x_y_z C, A_J c) {
+  return -1;
+}
+/*
+double quadricIntersection(double* Ro, double* Rd, x_y_z C, A_J c) {
+  double Aq = Axd^2 + Byd^2 + Czd^2 + Dxdyd + Exdzd + Fydzd;
+  double Bq = 2*Axoxd + 2*Byoyd + 2*Czozd + D(xoyd + yoxd) + Exozd + F(yozd + ydzo) + Gxd + Hyd + Izdpr;
+  double Cq = Axo^2 + Byo^2 + Czo^2 + Dxoyo + Exozo + Fyozo + Gxo + Hyo + Izo + J
 
+  // 1. Check Aq = 0 (If Aq = 0 then t = -Cq / Bq
+  // 2.If Aq � 0, then check the discriminant (If Bq2 - 4AqCq < 0 then there is no intersection)
+  // 3. Compute t0 and if t0 > 0 then done else compute t1  
+    
+  // since we are using it more than once
+  det = sqrt(det);
+  
+  double t0 =( - Bq - sqrt(Bq2 - 4AqCq))/ 2Aq;
+  double t1 =( - Bq + sqrt(Bq2 - 4AqCq))/ 2Aq;
+
+  double t0 = (-b - det) / (2*a);
+  if (t0 > 0) return t0; // smaller/lesser of the 2 values, needs to come first
+
+  double t1 = (-b + det) / (2*a);
+  if (t1 > 0) return t1;
+
+  return -1;
+}
+*/
 
 // Helper functions to find the first camera object and get it's specified width/height
 double getCameraWidth() {
@@ -943,7 +1068,15 @@ double getCameraHeight() {
   return h;
 }
 
+// helper to convert an x_y_z struct into an array of doubles
+void convertXYZ (x_y_z xyz, double* array) {
+  array[0] = xyz.x;
+  array[1] = xyz.y;
+  array[2] = xyz.z;
+}
+
 // helper function for JSON error checking (like does a sphere have a width, etc...)
+// TODO: move this error checking into the parser
 void checkJSON (JSON_object *object) {
   message("Info","Checking JSON for errors...");
   // variables
@@ -975,6 +1108,8 @@ void checkJSON (JSON_object *object) {
       */
       break;
     case 3: // cylinder
+      break;
+    case 4:
       break;
     default:
       message("Error","Un-caught error, was missed during parsing");
