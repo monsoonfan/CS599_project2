@@ -17,11 +17,15 @@ Workflow:
 
 Issues:
 -------
+TODO: make the background color black, this is the standard default for ray tracers (maybe I can make a white background)
 
 Questions:
 ---------
-- should we support planes that have a [1,0,0] normal?
-- 1 or 2 sided planes? (what to do when plane is facing away from the ray)
+- should we support planes that have a [1,0,0] normal? -> degenerate cases, have an infinite number of
+  intersections, he doesn't care if we color or not
+- 1 or 2 sided planes? (what to do when plane is facing away from the ray) -> color both sides of the plane the same
+
+look at iphone pic from 10/4 and you can see that D is the dot product of the origin with the plane normal
 
 ---------------------------------------------------------------------------------------
 */
@@ -31,6 +35,7 @@ Questions:
 #include <ctype.h>
 #include <math.h>
 
+#define DEFAULT_COLOR 0
 
 // typdefs
 typedef struct RGBPixel {
@@ -128,6 +133,61 @@ static inline void vSubtract(V3 a, V3 b, V3 c) {
 static inline double vDot(V3 a, V3 b) {
   return a[0]*b[0] + a[1]*b[1] + a[2]*b[2];
 }
+
+static inline double vNorm(V3 a) {
+  return sqrt(vDot(a,a));
+}
+
+static inline double vDist(V3 a, V3 b) {
+  V3 diff;
+  vSubtract(a, b, diff);
+  return vNorm(diff);
+  //  return vNormalize(a-b);
+}
+
+static inline void vScale(V3 a, double s, V3 c) {
+  c[0] = s * a[0];
+  c[1] = s * a[1];
+  c[2] = s * a[2];
+}
+
+// helper to convert an x_y_z struct into an array of doubles
+static inline void convertXYZ (x_y_z xyz, double* array) {
+  array[0] = xyz.x;
+  array[1] = xyz.y;
+  array[2] = xyz.z;
+}
+
+// dist_Point_to_Plane(): get distance (and perp base) from a point to a plane
+//    Input:  P  = a 3D point
+//            PL = a  plane with point V0 and normal n
+//    Output: *B = base point on PL of perpendicular from P
+//    Return: the distance from P to the plane PL
+ double vDistToPlane( double* point, x_y_z plane_point, x_y_z plane_normal) {
+  double numer;
+  double denom;
+  double sb;
+
+  double* tmp;
+  double t_pp[3];
+  convertXYZ(plane_point,t_pp);
+  vSubtract(point,t_pp,tmp);
+  double* base;
+
+  double t_pn[3];
+  convertXYZ(plane_normal,t_pn);
+
+  numer = -vDot( t_pn, tmp);
+  denom = vDot(t_pn, t_pn);
+  sb = numer / denom;
+
+  double t_ts[3];
+  vScale(t_pn,sb,t_ts);
+  double t_ta[3];
+  vAdd(point,t_ts,t_ta);
+  return vDist(point, t_ta);
+}  
+
 // END inline functions
 
 // global variables
@@ -135,6 +195,7 @@ int CURRENT_CHAR        = 'a';
 int OUTPUT_MAGIC_NUMBER = 6; // default to P6 PPM format
 int VERBOSE             = 0; // controls logfile message level
 int ASCII_IMAGE         = 0; // controls if there is an ascii image printed to terminal while raycasting
+int INFO                = 1; // controls if Info messages are printed, turn off prior to submission
 
 // global data structures
 JSON_file_struct    INPUT_FILE_DATA;
@@ -326,27 +387,27 @@ void readScene(char* filename) {
       // get the type of the object and store it at the index of the current object
       char* value = nextString(json);
       if (strcmp(value, "camera") == 0) {
-	message("Info","Processing camera object...");
+	if (INFO) message("Info","Processing camera object...");
 	INPUT_FILE_DATA.js_objects[obj_count].type = "camera";
 	INPUT_FILE_DATA.js_objects[obj_count].typecode = 0;
 	INPUT_FILE_DATA.num_objects = obj_count + 1;
       } else if (strcmp(value, "sphere") == 0) {
-	message("Info","Processing sphere object...");
+	if (INFO) message("Info","Processing sphere object...");
 	INPUT_FILE_DATA.js_objects[obj_count].type = "sphere";
 	INPUT_FILE_DATA.js_objects[obj_count].typecode = 1;
 	INPUT_FILE_DATA.num_objects = obj_count + 1;
       } else if (strcmp(value, "plane") == 0) {
-	message("Info","Processing plane object...");
+	if (INFO) message("Info","Processing plane object...");
 	INPUT_FILE_DATA.js_objects[obj_count].type = "plane";
 	INPUT_FILE_DATA.js_objects[obj_count].typecode = 2;
 	INPUT_FILE_DATA.num_objects = obj_count + 1;
       } else if (strcmp(value, "cylinder") == 0) {
-	message("Info","Processing cylinder object...");
+	if (INFO) message("Info","Processing cylinder object...");
 	INPUT_FILE_DATA.js_objects[obj_count].type = "cylinder";
 	INPUT_FILE_DATA.js_objects[obj_count].typecode = 3;
 	INPUT_FILE_DATA.num_objects = obj_count + 1;
       } else if (strcmp(value, "quadric") == 0) {
-	message("Info","Processing quadric object...");
+	if (INFO) message("Info","Processing quadric object...");
 	INPUT_FILE_DATA.js_objects[obj_count].type = "quadric";
 	INPUT_FILE_DATA.js_objects[obj_count].typecode = 4;
 	INPUT_FILE_DATA.num_objects = obj_count + 1;
@@ -417,7 +478,7 @@ void readScene(char* filename) {
       }
     }
   }
-  message("Info","Read scene file");
+  if (INFO) message("Info","Read scene file");
 }
 /* 
  ------------------------------------------------------------------
@@ -445,7 +506,7 @@ int main(int argc, char *argv[]) {
   char *outfile = argv[4];
   if (strcmp(infile,outfile)  == 0) {printf("Error: input and output file names the same!\n"); return EXIT_FAILURE;}
   
-  message("Info","Processing the following arguments:");
+  if (INFO) message("Info","Processing the following arguments:");
   printf("          Input : %s\n",infile);
   printf("          Output: %s\n",outfile);
   printf("          Width : %d\n",width);
@@ -601,7 +662,7 @@ void writePPMHeader (FILE* fh) {
   } else {
     message("Error","Trying to output unsupported format!\n");
   }
-  message("Info","Done writing header");
+  if (INFO) message("Info","Done writing header");
 }
 
 /*
@@ -630,7 +691,7 @@ void writePPM (char *outfile, PPM_file_struct *input) {
     // P3 format
     // Iterate over each pixel in the pixel map and write them byte by byte
   case(3):
-    message("Info","Outputting format 3");
+    if (INFO) message("Info","Outputting format 3");
     while(pixel_index < (OUTPUT_FILE_DATA.width) * (OUTPUT_FILE_DATA.height)) {      
       fprintf(fh_out,"%3d %3d %3d",RGB_PIXEL_MAP[pixel_index].r,RGB_PIXEL_MAP[pixel_index].g,RGB_PIXEL_MAP[pixel_index].b);
       modulo = (pixel_index + 1) % (OUTPUT_FILE_DATA.width);
@@ -645,18 +706,18 @@ void writePPM (char *outfile, PPM_file_struct *input) {
     // P6 format
     // write the entire pixel_map in one command
   case(6):
-    message("Info","Outputting format 6");
+    if (INFO) message("Info","Outputting format 6");
     fwrite(RGB_PIXEL_MAP, sizeof(RGBPixel), OUTPUT_FILE_DATA.width * OUTPUT_FILE_DATA.height, fh_out);
     break;
     // P7 format
   case(7):
     // write the entire pixel_map in one command, RGB writes from RGB pixel_map and RGBA writes from RGBA pixel_map
-    message("Info","Outputting format 7");
+    if (INFO) message("Info","Outputting format 7");
     if (strcmp(OUTPUT_FILE_DATA.tupltype,"RGB_ALPHA") == 0) {
-      message("Info","   output file will have alpha data");
+      if (INFO) message("Info","   output file will have alpha data");
       fwrite(RGBA_PIXEL_MAP, sizeof(RGBAPixel), OUTPUT_FILE_DATA.width * OUTPUT_FILE_DATA.height, fh_out);
     } else {
-      message("Info","   output file is RGB only");
+      if (INFO) message("Info","   output file is RGB only");
       fwrite(RGB_PIXEL_MAP, sizeof(RGBPixel), OUTPUT_FILE_DATA.width * OUTPUT_FILE_DATA.height, fh_out);
     }
     break;
@@ -667,12 +728,12 @@ void writePPM (char *outfile, PPM_file_struct *input) {
 
   fclose(fh_out);
   reportPPMStruct(&OUTPUT_FILE_DATA);
-  message("Info","Done ");
+  if (INFO) message("Info","Done ");
 }
 
 // helper function to visualize what's in a given PPM struct
 void reportPPMStruct (PPM_file_struct *input) {
-  message("Info","Contents of PPM struct:");
+  if (INFO) message("Info","Contents of PPM struct:");
   printf("     magic_number: %d\n",input->magic_number);
   printf("     width:        %d\n",input->width);
   printf("     height:       %d\n",input->height);
@@ -710,6 +771,19 @@ void printJSONObjectStruct (JSON_object jostruct) {
     printf("    color: [%f, %f, %f]\n",jostruct.color.x, jostruct.color.y, jostruct.color.z);
     printf(" position: [%f, %f, %f]\n",jostruct.position.x, jostruct.position.y, jostruct.position.z);
     printf("   normal: [%f, %f, %f]\n",jostruct.normal.x, jostruct.normal.y, jostruct.normal.z);
+  } else if (strcmp(jostruct.type,"quadric") == 0) {
+    printf("    color: [%f, %f, %f]\n",jostruct.color.x, jostruct.color.y, jostruct.color.z);
+    printf(" position: [%f, %f, %f]\n",jostruct.position.x, jostruct.position.y, jostruct.position.z);
+    printf("        A: %f\n",jostruct.coeffs.A);
+    printf("        B: %f\n",jostruct.coeffs.B);
+    printf("        C: %f\n",jostruct.coeffs.C);
+    printf("        D: %f\n",jostruct.coeffs.D);
+    printf("        E: %f\n",jostruct.coeffs.E);
+    printf("        F: %f\n",jostruct.coeffs.F);
+    printf("        G: %f\n",jostruct.coeffs.G);
+    printf("        H: %f\n",jostruct.coeffs.H);
+    printf("        I: %f\n",jostruct.coeffs.I);
+    printf("        J: %f\n",jostruct.coeffs.J);
   } else {
     printf("Error: unrecognized type\n");
   }
@@ -720,7 +794,7 @@ void printJSONObjectStruct (JSON_object jostruct) {
 void reportScene () {
   int len_array = INPUT_FILE_DATA.num_objects;
   printf("\n\n---------------------\n");
-  message("Info","PARSE RESULTS:");
+  if (INFO) message("Info","PARSE RESULTS:");
   printf("---------------------\n");
   printf("Processed scene with %d objects:\n\n",len_array);
   for (int i = 0; i < len_array; i++) {
@@ -802,6 +876,7 @@ void  rayCast(JSON_object *scene, RGBPixel *image) {
   // this represents the center of the view plane
   double cx = 0;
   double cy = 0;
+  double cz = 1;
   // make a view plane according to the (first) camera object in the JSON
   double w = getCameraWidth();
   double h = getCameraHeight();
@@ -825,7 +900,7 @@ void  rayCast(JSON_object *scene, RGBPixel *image) {
       double Rd[3] = {
 	cx - (w/2) + pixwidth * ( x + 0.5),
 	cy - (h/2) + pixheight * ( y + 0.5),
-	1
+	cz
       };
 
       // next, need to make Rd so that it's actually normalized
@@ -843,16 +918,16 @@ void  rayCast(JSON_object *scene, RGBPixel *image) {
 
 	switch(INPUT_FILE_DATA.js_objects[o].typecode) {
 	case 0:
-	  //message("Info","Skipping camera object...");
+	  //if (INFO) message("Info","Skipping camera object...");
 	  break;
 	case 1:
-	  //message("Info","processing sphere...");
+	  //if (INFO) message("Info","processing sphere...");
 	  t = sphereIntersection(Ro,Rd,
 				 INPUT_FILE_DATA.js_objects[o].position,
 				 INPUT_FILE_DATA.js_objects[o].radius);
 	  break;
 	case 2:	
-	  //message("Info","processing plane...");
+	  //if (INFO) message("Info","processing plane...");
 	  t = planeIntersection(Ro,Rd,
 				 INPUT_FILE_DATA.js_objects[o].position,
 				 INPUT_FILE_DATA.js_objects[o].normal);
@@ -867,6 +942,7 @@ void  rayCast(JSON_object *scene, RGBPixel *image) {
 	  t = quadricIntersection(Ro,Rd,
 				   INPUT_FILE_DATA.js_objects[o].position,
 				   INPUT_FILE_DATA.js_objects[o].coeffs);
+	  if (VERBOSE) printf("DBG: %f\n",t);
 	  break;
 	default:
 	  message("Error","Unhandled typecode, camera/plane/sphere are supported");
@@ -886,9 +962,9 @@ void  rayCast(JSON_object *scene, RGBPixel *image) {
 	RGB_PIXEL_MAP[i].b = shadePixel(scene[best_t_index].color.z);
       } else {
 	if (ASCII_IMAGE) printf(".");
-	RGB_PIXEL_MAP[i].r = shadePixel(1);
-	RGB_PIXEL_MAP[i].g = shadePixel(1);
-	RGB_PIXEL_MAP[i].b = shadePixel(1);
+	RGB_PIXEL_MAP[i].r = shadePixel(DEFAULT_COLOR);
+	RGB_PIXEL_MAP[i].g = shadePixel(DEFAULT_COLOR);
+	RGB_PIXEL_MAP[i].b = shadePixel(DEFAULT_COLOR);
       }
       i++; // increment the pixelmap counter
     }
@@ -954,6 +1030,8 @@ double planeIntersection(double* Ro, double* Rd, x_y_z C, x_y_z N) {
   // t = -(AX0 + BY0 + CZ0 + D) / (AXd + BYd + CZd)
   // t = -(Pn� R0 + D) / (Pn � Rd)
 
+  // the projection of Vo onto a vector from the origin to shortest point on plane
+
   // Convert some values from x_y_z struct format to V3 format for 3d math
   double n[3];
   double c[3];
@@ -962,23 +1040,33 @@ double planeIntersection(double* Ro, double* Rd, x_y_z C, x_y_z N) {
 
   // if Vd = (Pn � Rd) = 0, no intersection, so compute it first and return if no intersection
   double Vd = vDot(n,Rd);
-  //printf("Vd: %f\n",Vd);
-  if (Vd = 0) return -1;
-  if (Vd > 0) return -1; // TODO determine this case
+  if (Vd == 0) return -1;
+  //if (Vd > 0) return -1; // TODO determine this case
 
   double origin[3] = {0, 0, 0}; // always assume this for origin
   // distance is a scalar (sqrt(sqr(x),...)
   // dot product of n,Ro is a scalar, so that addition is standar addition
   double d;
-  d = sqrt(sqr(c[0] + origin[0]) + sqr(c[1] + origin[1]) + sqr(c[2] + origin[2]));
+  if (VERBOSE) printf("c0: %f, o0: %f, c1: %f, o1: %f, c2: %f, o2: %f\n",c[0],origin[0],c[1],origin[1],c[2],origin[2]);
+  //  d = sqrt(sqr(c[0] + origin[0]) + sqr(c[1] + origin[1]) + sqr(c[2] + origin[2]));
+  d = vDistToPlane(origin,C,N);
   double V0 = -(vDot(n,Ro) + d);
   double t = V0 / d;
+  if (VERBOSE) printf("Vd: %f, d: %f, t: %f\n",Vd,d,t);
+
   if (t > 0) return -1; // plane intersection is behind origin, ignore it
 
   // if we got this far, plane intersects the ray in front of origin and faces the ray
   // compute the intersection point: Pi = [Xi Yi Zi] = [X0 + Xd * t Y0 + Yd * t Z0 + Zd * t]
   // actually, who cares about the intersection we have distance t along the ray, so we are good
+  if (VERBOSE) printf("returning %f\n",t);
   return t;
+  /*
+// dot product (3D) which  allows vector operations in arguments
+#define dot(u,v)   ((u).x * (v).x + (u).y * (v).y + (u).z * (v).z)
+#define norm(v)    sqrt(dot(v,v))  // norm = length of  vector
+#define d(P,Q)     norm(P-Q)        // distance = norm of difference
+  */
 }
 
 // Cylinder intersection code (from example in class) 
@@ -1007,34 +1095,74 @@ double cylinderIntersection(double* Ro, double* Rd, x_y_z C, double r) {
 }
 
 // Quadric intersection code (from siggraph)
+/*
 double quadricIntersection(double* Ro, double* Rd, x_y_z C, A_J c) {
   return -1;
 }
-/*
+*/
 double quadricIntersection(double* Ro, double* Rd, x_y_z C, A_J c) {
-  double Aq = Axd^2 + Byd^2 + Czd^2 + Dxdyd + Exdzd + Fydzd;
-  double Bq = 2*Axoxd + 2*Byoyd + 2*Czozd + D(xoyd + yoxd) + Exozd + F(yozd + ydzo) + Gxd + Hyd + Izdpr;
-  double Cq = Axo^2 + Byo^2 + Czo^2 + Dxoyo + Exozo + Fyozo + Gxo + Hyo + Izo + J
+  /*
+  // From the siggraph page directly, no ability to center the quadric
+  double Aq = c.A * sqr(Rd[0]) + c.B * sqr(Rd[1]) + c.C * sqr(Rd[2]) +
+    c.D * Rd[0] * Rd[1] + c.E * Rd[0] * Rd[2] + c.F * Rd[1] * Rd[2];
+  double Bq = (2 * c.A * Ro[0] * Rd[0]) + (2 * c.B * Ro[1] * Rd[1]) +
+    (2 * c.C * Ro[2] * Rd[2]) + c.D * (Ro[0] * Rd[1] + Ro[1] * Rd[0]) +
+    (c.E * Ro[0] * Rd[2]) + c.F * (Ro[1] * Rd[2] + Rd[1] * Ro[2]) +
+    c.G * Rd[0] + c.H * Rd[1] + c.I * Rd[2]; // pr> at end?
+  double Cq = c.A * sqr(Ro[0]) + c.B * sqr(Ro[1]) + c.C * sqr(Ro[2]) +
+    c.D * Ro[0] * Ro[1] + c.E * Ro[0] * Ro[2] + c.F * Ro[1] * Ro[2] +
+    c.G * Ro[0] + c.H * Ro[1] + c.I * Ro[2] + c.J ;//should always be just J, since our origin is 0,0,0
+  */
 
+  //TODO: need to add in C (center/position offset?)
+  // Try with centered coords:
+  // Ax^2 + By^2 + Cz^2 + Dxy+ Exz + Fyz + Gx + Hy + Iz + J = 0
+  // A(x + cx)^2 + B(y + cy)^2 + C(z + cz)^2 + D(x + cx)(y + cy) +
+  // E(x + cx)(z + cz) + F(y + cy)(z + cz) + G(x + cx) + H(y + cy) +
+  // I(z + cz) + J = 0
+  //
+  // On one line:
+  // A(x + cx)^2 + B(y + cy)^2 + C(z + cz)^2 + D(x + cx)(y + cy) + E(x + cx)(z + cz) + F(y + cy)(z + cz) + G(x + cx) + H(y + cy) + I(z + cz) + J = 0
+  //
+  // Now substitue in the ray and solve for t (assume Ro component is always 0, so skip it :
+  // A(t*Rdx + cx)^2 + B(t*Rdy + cy)^2 + C(t*Rdz + cz)^2 + D(t*Rdx + cx)(t*Rdy + cy) + E(t*Rdx + cx)(t*Rdz + cz) + F(t*Rdy + cy)(t*Rdz + cz) + G(t*Rdx + cx) + H(t*Rdy + cy) + I(t*Rdz + cz) + J = 0
+  //
+  // 
+  VERBOSE = 0;
+  if (VERBOSE) printf("DBG : xyz=(%f,%f,%f) AJ=(%f,%f,%f,%f)\n",C.x,C.y,C.z,c.A,c.B,c.C,c.D);
+  if (VERBOSE) printf("DBG : Rd's > x=%f, y=%f, z=%f\n",Rd[0],Rd[1],Rd[2]);
+  double Aq = c.A*sqr(Rd[0]) + c.B*sqr(Rd[1]) + c.C*sqr(Rd[2]) + c.D*Rd[0]*Rd[1] + c.E*Rd[0]*Rd[2] + c.F*Rd[1]*Rd[2];
+  double Bq = - 2*c.A*Rd[0]*C.x - 2*c.B*Rd[1]*C.y - 2*c.C*Rd[2]*C.z - c.D*Rd[0]*C.y - c.D*Rd[1]*C.x -
+    c.E*Rd[0]*C.z - c.E*Rd[2]*C.x - c.F*Rd[1]*C.z - c.F*Rd[2]*C.y + c.G*Rd[0] + c.H*Rd[1] + c.I*Rd[2];
+  double Cq = c.A*sqr(C.x) + c.B*sqr(C.y) + c.C*sqr(C.z) + c.D*C.x*C.y +
+    c.E*C.x*C.z + c.F*C.y*C.z - c.G*C.x - c.H*C.y - c.I*C.z + c.J;
+  if (VERBOSE) printf("DBG : Aq=%f, Bq=%f, Cq=%f)\n",Aq,Bq,Cq);
+    
+  
   // 1. Check Aq = 0 (If Aq = 0 then t = -Cq / Bq
   // 2.If Aq � 0, then check the discriminant (If Bq2 - 4AqCq < 0 then there is no intersection)
-  // 3. Compute t0 and if t0 > 0 then done else compute t1  
-    
-  // since we are using it more than once
-  det = sqrt(det);
+  // 3. Compute t0 and if t0 > 0 then done else compute t1
+  if (Aq == 0) return -Cq / Bq;
   
-  double t0 =( - Bq - sqrt(Bq2 - 4AqCq))/ 2Aq;
-  double t1 =( - Bq + sqrt(Bq2 - 4AqCq))/ 2Aq;
-
-  double t0 = (-b - det) / (2*a);
+  // discriminant 
+  //double disc = (sqr(Bq) - (4 * Aq * Cq)) * -1;
+  double disc = (sqr(Bq) - (4 * Aq * Cq));
+  if (VERBOSE) printf("DBG : disc=(%f), where Bq^2=(%f) and 4ac=(%f)\n",disc,sqr(Bq),(4*Aq*Cq));
+  //if (disc < 0) return -1; // TODO: is this true for quadrics?
+  
+  // since we are using it more than once
+  disc = sqrt(disc) ;
+  
+  double t0 = (-Bq - disc) / (2 * Aq);
+  if (VERBOSE) printf("DBG : t0=%f\n",t0);
   if (t0 > 0) return t0; // smaller/lesser of the 2 values, needs to come first
 
-  double t1 = (-b + det) / (2*a);
+  double t1 = (-Bq + disc) / (2 * Aq);
+  if (VERBOSE) printf("DBG : t1=%f\n",t1);
   if (t1 > 0) return t1;
 
   return -1;
 }
-*/
 
 // Helper functions to find the first camera object and get it's specified width/height
 double getCameraWidth() {
@@ -1068,17 +1196,10 @@ double getCameraHeight() {
   return h;
 }
 
-// helper to convert an x_y_z struct into an array of doubles
-void convertXYZ (x_y_z xyz, double* array) {
-  array[0] = xyz.x;
-  array[1] = xyz.y;
-  array[2] = xyz.z;
-}
-
 // helper function for JSON error checking (like does a sphere have a width, etc...)
 // TODO: move this error checking into the parser
 void checkJSON (JSON_object *object) {
-  message("Info","Checking JSON for errors...");
+  if (INFO) message("Info","Checking JSON for errors...");
   // variables
   
   // code body
@@ -1090,21 +1211,21 @@ void checkJSON (JSON_object *object) {
 	message("Error","Camera object must have width and height properties");
       //      if (object[o].radius || sizeof(object[o].normal) > 0 || sizeof(object[o].color) > 0)
       if (object[o].radius)
-	message("Info","Ignoring camera object properties in excess of width/height");
+	if (INFO) message("Info","Ignoring camera object properties in excess of width/height");
       break;
     case 1: // sphere
       //      if (!object[o].radius || !(object[o].position.x > sizeof(object[o].position)) || !object[o].color.x)
       if (!object[o].radius)      
 	message("Error","Sphere object is missing radius, position, or color");
       if (object[o].width || object[o].height || sizeof(object[o].normal) > 0)
-	message("Info","Ignoring sphere object properties in excess of radius/position/color");
+	if (INFO) message("Info","Ignoring sphere object properties in excess of radius/position/color");
       break;
     case 2: // plane
       /*
       if (sizeof(object[o].normal) == 0 || !object[o].position || !object[o].color)
 	message("Error","Plane object is missing normal, position, or color");
       if (object[o].width || object[o].height || object[o].radius)
-	message("Info","Ignoring plane object properties in excess of normal/position/color");
+	if (INFO) message("Info","Ignoring plane object properties in excess of normal/position/color");
       */
       break;
     case 3: // cylinder
@@ -1115,6 +1236,6 @@ void checkJSON (JSON_object *object) {
       message("Error","Un-caught error, was missed during parsing");
     }
   }
-  message("Info","Done checking JSON for errors...");
+  if (INFO) message("Info","Done checking JSON for errors...");
 }
   

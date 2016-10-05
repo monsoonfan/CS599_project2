@@ -22,6 +22,7 @@ clean:
 test1:
 	gcc raycast.c -o raycast
 	./raycast 400 500 test_good_01.json test.ppm
+	emacs test.ppm
 
 test2:
 	gcc raycast.c -o raycast
@@ -41,9 +42,20 @@ test5:
 	./raycast 1000 800 test_good_05.json test.ppm
 	emacs test.ppm
 
+test6:
+	gcc raycast.c -o raycast
+	./raycast 1000 800 test_good_06.json test.ppm
+	emacs -geometry 200x60 test.ppm
+
+testexample:
+	gcc raycast.c -o raycast
+	./raycast 1000 800 example.json test.ppm
+	emacs -geometry 200x60 test.ppm
+
 testgood.%:
 	gcc raycast.c -o raycast
-	./raycast 60 30 test_good_$*.json test.ppm
+	./raycast 600 600 test_good_$*.json test.ppm
+	emacs test.ppm
 
 testbad.%:
 	gcc raycast.c -o raycast

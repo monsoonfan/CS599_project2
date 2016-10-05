@@ -13,7 +13,7 @@
 {
 "type": "plane",
 "color": [0, 0, 1.0],
-"position": [0, 0, 0],
+"position": [0, -1, 0],
 "normal": [0, 1, 0]
 }
 ]
