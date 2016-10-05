@@ -19,6 +19,18 @@ clean:
 #############################################
 # targets for testing each of the simple test configs
 #############################################
+ellipsoid:
+	gcc raycast.c -o raycast
+	./raycast 600 600 ellipsoid.json ellipsoid.ppm
+
+cylinder:
+	gcc raycast.c -o raycast
+	./raycast 600 600 cylinder.json cylinder.ppm
+
+cone:
+	gcc raycast.c -o raycast
+	./raycast 600 600 cone.json cone.ppm
+
 test1:
 	gcc raycast.c -o raycast
 	./raycast 400 500 test_good_01.json test.ppm

@@ -890,7 +890,8 @@ void  rayCast(JSON_object *scene, RGBPixel *image) {
   //////////////////////////////////////
   // copy of psuedo code from text/class
   //////////////////////////////////////
-  for (int y = 0; y < M; y += 1) {
+  //  for (int y = 0; y < M; y += 1) {
+  for (int y = M; y >= 0; y -= 1) { // y-axis was flipped, so run this backwards
     for (int x = 0; x < N; x += 1) {
       // origin
       double Ro[3] = {0,0,0}; // vector that represents a point that represents the origin
